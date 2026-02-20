@@ -1,0 +1,36 @@
+## .NET
+bin/
+obj/
+*.user
+*.suo
+*.userosscache
+*.sln.docstates
+
+## Build results
+[Dd]ebug/
+[Rr]elease/
+x64/
+x86/
+
+## NuGet
+*.nupkg
+**/[Pp]ackages/*
+
+## Visual Studio
+.vs/
+*.rsuser
+*.cachefile
+*.VisualState.xml
+*.DotSettings.user
+
+## Rider
+.idea/
+*.sln.iml
+
+## OS
+Thumbs.db
+Desktop.ini
+.DS_Store
+
+## App settings (user-specific)
+settings.json
