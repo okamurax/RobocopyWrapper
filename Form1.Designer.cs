@@ -185,16 +185,24 @@ partial class Form1
         splitContainer.Panel1.Controls.Add(lblProgress);
 
         // --- Panel2: エラーログ ---
+        // ラベルとクリアボタンを同じ行に並べるヘッダーパネル
+        var pnlErrorHeader = new Panel();
+        pnlErrorHeader.Dock = DockStyle.Top;
+        pnlErrorHeader.Height = 23;
+
         lblErrorLog = new Label();
         lblErrorLog.AutoSize = true;
         lblErrorLog.Text = "エラーログ:";
-        lblErrorLog.Dock = DockStyle.Top;
+        lblErrorLog.Location = new Point(0, 4);
 
         btnClearLog = new Button();
-        btnClearLog.Size = new Size(60, 20);
+        btnClearLog.Size = new Size(75, 23);
         btnClearLog.Text = "クリア";
-        btnClearLog.Dock = DockStyle.Top;
+        btnClearLog.Dock = DockStyle.Right;
         btnClearLog.Click += BtnClearLog_Click;
+
+        pnlErrorHeader.Controls.Add(lblErrorLog);
+        pnlErrorHeader.Controls.Add(btnClearLog);
 
         txtErrorLog = new TextBox();
         txtErrorLog.Multiline = true;
@@ -208,8 +216,7 @@ partial class Form1
         txtErrorLog.DoubleClick += TxtErrorLog_DoubleClick;
 
         splitContainer.Panel2.Controls.Add(txtErrorLog);
-        splitContainer.Panel2.Controls.Add(btnClearLog);
-        splitContainer.Panel2.Controls.Add(lblErrorLog);
+        splitContainer.Panel2.Controls.Add(pnlErrorHeader);
 
         // Form1
         AutoScaleDimensions = new SizeF(7F, 15F);
