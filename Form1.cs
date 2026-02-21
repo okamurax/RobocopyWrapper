@@ -34,6 +34,12 @@ public partial class Form1 : Form
     private DateTime _nextScheduledTime = DateTime.MaxValue;
     private DateTime _lastRunTime = DateTime.MinValue;
 
+    // 実行制御
+    // Kill/中止された場合は前回実行時刻を更新しない
+    private bool _wasKilled;
+    // フォーカス取得時のnudScheduleHoursの値（値未変更のLeaveでリセットしないため）
+    private decimal _nudValueOnEnter;
+
     // robocopyの出力からエラー行を判定するパターン
     private static readonly Regex ErrorLinePattern = new(
         @"(ERROR\s|FAILED|エラー|^\s*\d{4}/\d{2}/\d{2}\s+\d{2}:\d{2}:\d{2}\s+ERROR|" +
@@ -225,18 +231,31 @@ public partial class Form1 : Form
         trayMenuShow.Click += TrayMenuShow_Click;
         trayMenuExit.Click += TrayMenuExit_Click;
         notifyIcon.DoubleClick += NotifyIcon_DoubleClick;
+        // バルーンチップをクリックしてもウィンドウを表示
+        notifyIcon.BalloonTipClicked += (_, _) => ShowForm();
         notifyIcon.Visible = true;
 
         // スケジュールイベントはLoadSettings後に接続（読み込み時の誤発火防止）
         chkSchedule.CheckedChanged += ChkSchedule_CheckedChanged;
         nudScheduleHours.ValueChanged += NudScheduleHours_ValueChanged;
         nudScheduleHours.Leave += NudScheduleHours_Leave;
+        // フォーカス取得時の値を記録（値未変更のLeaveでリセットしないため）
+        nudScheduleHours.Enter += (_, _) => _nudValueOnEnter = nudScheduleHours.Value;
+        // Enterキーでもカウントダウンをリセット（Leaveが発火しないため）
+        nudScheduleHours.KeyDown += (s, e) =>
+        {
+            if (e.KeyCode == Keys.Enter)
+                NudScheduleHours_Leave(s, EventArgs.Empty);
+        };
 
         // ロード済み設定でスケジューラーを初期化
         nudScheduleHours.Enabled = chkSchedule.Checked;
         if (chkSchedule.Checked)
         {
             // 前回実行時刻が記録されていれば、そこからn時間後を次回時刻に設定
+            // 前回からn時間以上経過している場合はリセット（今からn時間後）
+            // ※ 期限切れタスクを起動時に即時実行しない設計: バックグラウンドで
+            //   意図せず大量コピーが始まるリスクを避けるため意図的にスキップ
             if (_lastRunTime != DateTime.MinValue)
             {
                 var nextFromLast = _lastRunTime.AddHours((double)nudScheduleHours.Value);
@@ -250,7 +269,7 @@ public partial class Form1 : Form
             }
             StartSchedulerTimer();
             UpdateNextScheduleLabel();
-            this.Text = "Robocopy Wrapper [スケジュール実行中]";
+            this.Text = "Robocopy Wrapper [スケジュール待機中]";
         }
 
         FormClosing += Form1_FormClosing;
@@ -308,7 +327,6 @@ public partial class Form1 : Form
             if (DateTime.Now < _nextScheduledTime) return;
 
             // スリープ復帰後に複数スロットが未消化でも1回だけ実行
-            // 現在時刻を超えるまでn時間ずつ進める（元の予定時刻基準を維持）
             var interval = TimeSpan.FromHours((double)nudScheduleHours.Value);
             while (_nextScheduledTime <= DateTime.Now)
                 _nextScheduledTime = _nextScheduledTime.Add(interval);
@@ -343,6 +361,8 @@ public partial class Form1 : Form
         }
         catch (Exception ex)
         {
+            // フォームが破棄済みの場合はコントロール操作を試みない
+            if (IsDisposed) return;
             AppendProgressLineDirect(
                 $"[{DateTime.Now:HH:mm:ss}] スケジューラーエラー: {ex.Message}", ColorError);
             ScrollProgressToBottom();
@@ -353,9 +373,7 @@ public partial class Form1 : Form
     {
         if (!chkSchedule.Checked || _nextScheduledTime == DateTime.MaxValue)
         {
-            lblNextRun.Text = _lastRunTime != DateTime.MinValue
-                ? $"前回: {_lastRunTime:HH:mm}"
-                : "";
+            lblNextRun.Text = FormatLastRunTime();
             notifyIcon.Text = "Robocopy Wrapper";
             return;
         }
@@ -365,14 +383,21 @@ public partial class Form1 : Form
 
         var hours = (int)remaining.TotalHours;
         var minutes = remaining.Minutes;
-        var lastStr = _lastRunTime != DateTime.MinValue
-            ? $"前回: {_lastRunTime:HH:mm}  "
-            : "";
-        lblNextRun.Text = $"{lastStr}次回: {_nextScheduledTime:HH:mm} (残り {hours:D2}:{minutes:D2})";
+        var lastStr = FormatLastRunTime();
+        var prefix = lastStr.Length > 0 ? lastStr + "  " : "";
+        lblNextRun.Text = $"{prefix}次回: {_nextScheduledTime:HH:mm} (残り {hours:D2}:{minutes:D2})";
 
-        // トレイアイコンのTooltipにも次回時刻を反映
         var trayText = $"Robocopy Wrapper - 次回: {_nextScheduledTime:HH:mm}";
         notifyIcon.Text = trayText.Length <= 63 ? trayText : trayText[..63];
+    }
+
+    // 前回実行時刻を表示用にフォーマット（日をまたぐ場合は日付を付加）
+    private string FormatLastRunTime()
+    {
+        if (_lastRunTime == DateTime.MinValue) return "";
+        return _lastRunTime.Date == DateTime.Today
+            ? $"前回: {_lastRunTime:HH:mm}"
+            : $"前回: {_lastRunTime:M/d HH:mm}";
     }
 
     private void ChkSchedule_CheckedChanged(object? sender, EventArgs e)
@@ -384,15 +409,13 @@ public partial class Form1 : Form
             _nextScheduledTime = DateTime.Now.AddHours((double)nudScheduleHours.Value);
             StartSchedulerTimer();
             UpdateNextScheduleLabel();
-            this.Text = "Robocopy Wrapper [スケジュール実行中]";
+            this.Text = "Robocopy Wrapper [スケジュール待機中]";
         }
         else
         {
             StopSchedulerTimer();
             _nextScheduledTime = DateTime.MaxValue;
-            lblNextRun.Text = _lastRunTime != DateTime.MinValue
-                ? $"前回: {_lastRunTime:HH:mm}"
-                : "";
+            lblNextRun.Text = FormatLastRunTime();
             this.Text = "Robocopy Wrapper";
             notifyIcon.Text = "Robocopy Wrapper";
         }
@@ -400,20 +423,21 @@ public partial class Form1 : Form
         SaveSettings();
     }
 
-    // 値変更時は設定保存のみ（カウントダウンリセットはフォーカス離脱時）
+    // 値変更時は設定保存のみ
     private void NudScheduleHours_ValueChanged(object? sender, EventArgs e)
     {
         SaveSettings();
     }
 
-    // フォーカスを外したタイミングでカウントダウンをリセット（誤操作によるリセット防止）
+    // フォーカスを外したとき、値が変わっていた場合のみカウントダウンをリセット
     private void NudScheduleHours_Leave(object? sender, EventArgs e)
     {
-        if (chkSchedule.Checked)
+        if (chkSchedule.Checked && nudScheduleHours.Value != _nudValueOnEnter)
         {
             _nextScheduledTime = DateTime.Now.AddHours((double)nudScheduleHours.Value);
             UpdateNextScheduleLabel();
         }
+        _nudValueOnEnter = nudScheduleHours.Value;
     }
 
     #endregion
@@ -693,6 +717,7 @@ public partial class Form1 : Form
 
     private async Task ExecuteRobocopyAsync()
     {
+        _wasKilled = false;
         SetRunningState(true);
         rtbProgress.Clear();
         SetFixedLineSpacing(rtbProgress);
@@ -713,7 +738,6 @@ public partial class Form1 : Form
 
         StartFlushTimer();
 
-        var exitCode = -1;
         try
         {
             var psi = new ProcessStartInfo
@@ -755,7 +779,7 @@ public partial class Form1 : Form
 
             await _runningProcess.WaitForExitAsync();
 
-            exitCode = _runningProcess.ExitCode;
+            var exitCode = _runningProcess.ExitCode;
 
             StopFlushTimer();
 
@@ -780,6 +804,13 @@ public partial class Form1 : Form
             ScrollProgressToBottom();
             txtErrorLog.AppendText(Environment.NewLine + finishLine + Environment.NewLine);
 
+            // 正常終了（中止でない）場合のみ前回実行時刻を更新
+            if (!_wasKilled)
+            {
+                _lastRunTime = DateTime.Now;
+                SaveSettings();
+            }
+
             // フォームが非表示の場合は完了をバルーンチップで通知
             if (!this.Visible)
             {
@@ -792,7 +823,6 @@ public partial class Form1 : Form
         }
         catch (Exception ex)
         {
-            StopFlushTimer();
             var msg = $"[例外] {ex.Message}";
             AppendProgressLineDirect(msg, ColorError);
             ScrollProgressToBottom();
@@ -804,13 +834,8 @@ public partial class Form1 : Form
             _runningProcess?.Dispose();
             _runningProcess = null;
             _isPaused = false;
-
-            // 前回実行時刻を更新してラベルとsettings.jsonに反映
-            _lastRunTime = DateTime.Now;
-            SaveSettings();
-            UpdateNextScheduleLabel();
-
-            SetRunningState(false);
+            _wasKilled = false;
+            SetRunningState(false); // タイトル・Tooltip更新 + UpdateNextScheduleLabel を内部で呼ぶ
         }
     }
 
@@ -856,6 +881,7 @@ public partial class Form1 : Form
                 NtResumeProcess(_runningProcess.Handle);
                 _isPaused = false;
             }
+            _wasKilled = true;
             _runningProcess.Kill(entireProcessTree: true);
             _progressQueue.Enqueue(new LogEntry($"[{DateTime.Now:HH:mm:ss}] 中止しました", ColorError, false));
             _errorQueue.Enqueue($"[{DateTime.Now:HH:mm:ss}] 中止しました");
@@ -878,6 +904,19 @@ public partial class Form1 : Form
         txtOptions.ReadOnly = running;
         chkSchedule.Enabled = !running;
         nudScheduleHours.Enabled = !running && chkSchedule.Checked;
+
+        if (running)
+        {
+            this.Text = "Robocopy Wrapper [実行中]";
+            notifyIcon.Text = "Robocopy Wrapper - 実行中...";
+        }
+        else
+        {
+            this.Text = chkSchedule.Checked
+                ? "Robocopy Wrapper [スケジュール待機中]"
+                : "Robocopy Wrapper";
+            UpdateNextScheduleLabel(); // トレイTooltipも更新
+        }
     }
 
     #endregion
@@ -1005,11 +1044,11 @@ public partial class Form1 : Form
         {
             e.Cancel = true;
             Hide();
-            // 初回のみバルーンチップでトレイ格納を案内
+            // 初回のみバルーンチップでトレイ格納を案内（右クリック操作も含めて案内）
             if (!_trayBalloonShown)
             {
                 notifyIcon.ShowBalloonTip(3000, "Robocopy Wrapper",
-                    "タスクトレイに格納されました。アイコンをダブルクリックで再表示できます。",
+                    "タスクトレイに格納されました。ダブルクリックで再表示、右クリックで終了できます。",
                     ToolTipIcon.Info);
                 _trayBalloonShown = true;
                 SaveSettings();
@@ -1026,6 +1065,7 @@ public partial class Form1 : Form
                 try
                 {
                     if (_isPaused) NtResumeProcess(_runningProcess.Handle);
+                    _wasKilled = true;
                     _runningProcess.Kill(entireProcessTree: true);
                 }
                 catch { }
@@ -1043,6 +1083,7 @@ public partial class Form1 : Form
                 try
                 {
                     if (_isPaused) NtResumeProcess(_runningProcess.Handle);
+                    _wasKilled = true;
                     _runningProcess.Kill(entireProcessTree: true);
                 }
                 catch { }
