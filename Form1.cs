@@ -25,6 +25,13 @@ public partial class Form1 : Form
     private System.Windows.Forms.Timer? _flushTimer;
     private int _errorCount;
 
+    // タスクトレイ
+    private bool _isExiting;
+
+    // スケジューラー
+    private System.Windows.Forms.Timer? _schedulerTimer;
+    private DateTime _nextScheduledTime = DateTime.MaxValue;
+
     // robocopyの出力からエラー行を判定するパターン
     private static readonly Regex ErrorLinePattern = new(
         @"(ERROR\s|FAILED|エラー|^\s*\d{4}/\d{2}/\d{2}\s+\d{2}:\d{2}:\d{2}\s+ERROR|" +
@@ -212,8 +219,156 @@ public partial class Form1 : Form
     {
         InitializeComponent();
         LoadSettings();
+
+        // タスクトレイ設定
+        notifyIcon.Icon = this.Icon ?? SystemIcons.Application;
+        trayMenuShow.Click += TrayMenuShow_Click;
+        trayMenuExit.Click += TrayMenuExit_Click;
+        notifyIcon.DoubleClick += NotifyIcon_DoubleClick;
+
+        // スケジュールイベントはLoadSettings後に接続（読み込み時の誤発火防止）
+        chkSchedule.CheckedChanged += ChkSchedule_CheckedChanged;
+        nudScheduleHours.ValueChanged += NudScheduleHours_ValueChanged;
+
+        // ロード済み設定でスケジューラーを初期化
+        nudScheduleHours.Enabled = chkSchedule.Checked;
+        if (chkSchedule.Checked)
+        {
+            _nextScheduledTime = DateTime.Now.AddHours((double)nudScheduleHours.Value);
+            StartSchedulerTimer();
+            UpdateNextScheduleLabel();
+        }
+
         FormClosing += Form1_FormClosing;
     }
+
+    #region Task Tray
+
+    private void ShowForm()
+    {
+        Show();
+        if (WindowState == FormWindowState.Minimized)
+            WindowState = FormWindowState.Normal;
+        BringToFront();
+        Activate();
+    }
+
+    private void TrayMenuShow_Click(object? sender, EventArgs e)
+    {
+        ShowForm();
+    }
+
+    private void TrayMenuExit_Click(object? sender, EventArgs e)
+    {
+        _isExiting = true;
+        Application.Exit();
+    }
+
+    private void NotifyIcon_DoubleClick(object? sender, EventArgs e)
+    {
+        ShowForm();
+    }
+
+    #endregion
+
+    #region Scheduler
+
+    private void StartSchedulerTimer()
+    {
+        if (_schedulerTimer != null) return;
+        _schedulerTimer = new System.Windows.Forms.Timer { Interval = 30_000 }; // 30秒ごとにチェック
+        _schedulerTimer.Tick += SchedulerTimer_Tick;
+        _schedulerTimer.Start();
+    }
+
+    private void StopSchedulerTimer()
+    {
+        if (_schedulerTimer != null)
+        {
+            _schedulerTimer.Stop();
+            _schedulerTimer.Dispose();
+            _schedulerTimer = null;
+        }
+    }
+
+    private async void SchedulerTimer_Tick(object? sender, EventArgs e)
+    {
+        UpdateNextScheduleLabel();
+
+        if (DateTime.Now < _nextScheduledTime) return;
+
+        // 次回時刻を先に更新（元の予定時刻基準でn時間後）
+        _nextScheduledTime = _nextScheduledTime.AddHours((double)nudScheduleHours.Value);
+        UpdateNextScheduleLabel();
+
+        if (_runningProcess != null)
+        {
+            // 手動実行中 → スキップ（次回は上記で計算済みの時刻）
+            AppendProgressLineDirect(
+                $"[{DateTime.Now:HH:mm:ss}] スケジュール実行をスキップ (実行中)", ColorInfo);
+            ScrollProgressToBottom();
+            return;
+        }
+
+        var source = txtSource.Text.Trim().Trim('"');
+        var dest = txtDest.Text.Trim().Trim('"');
+
+        if (string.IsNullOrEmpty(source) || string.IsNullOrEmpty(dest))
+        {
+            AppendProgressLineDirect(
+                $"[{DateTime.Now:HH:mm:ss}] スケジュール実行をスキップ (コピー元/先が未設定)", ColorInfo);
+            ScrollProgressToBottom();
+            return;
+        }
+
+        await ExecuteRobocopyAsync();
+    }
+
+    private void UpdateNextScheduleLabel()
+    {
+        if (!chkSchedule.Checked || _nextScheduledTime == DateTime.MaxValue)
+        {
+            lblNextRun.Text = "";
+            return;
+        }
+        var remaining = _nextScheduledTime - DateTime.Now;
+        if (remaining < TimeSpan.Zero) remaining = TimeSpan.Zero;
+        lblNextRun.Text =
+            $"次回: {_nextScheduledTime:HH:mm} (残り {(int)remaining.TotalHours:D2}:{remaining.Minutes:D2})";
+    }
+
+    private void ChkSchedule_CheckedChanged(object? sender, EventArgs e)
+    {
+        nudScheduleHours.Enabled = chkSchedule.Checked;
+
+        if (chkSchedule.Checked)
+        {
+            _nextScheduledTime = DateTime.Now.AddHours((double)nudScheduleHours.Value);
+            StartSchedulerTimer();
+            UpdateNextScheduleLabel();
+        }
+        else
+        {
+            StopSchedulerTimer();
+            _nextScheduledTime = DateTime.MaxValue;
+            lblNextRun.Text = "";
+        }
+
+        SaveSettings();
+    }
+
+    private void NudScheduleHours_ValueChanged(object? sender, EventArgs e)
+    {
+        if (chkSchedule.Checked)
+        {
+            // 間隔変更時は今から再カウント
+            _nextScheduledTime = DateTime.Now.AddHours((double)nudScheduleHours.Value);
+            UpdateNextScheduleLabel();
+        }
+        SaveSettings();
+    }
+
+    #endregion
 
     #region Drag & Drop
 
@@ -485,7 +640,6 @@ public partial class Form1 : Form
 
         var source = txtSource.Text.Trim().Trim('"');
         var dest = txtDest.Text.Trim().Trim('"');
-        var options = txtOptions.Text.Trim();
 
         if (string.IsNullOrEmpty(source) || string.IsNullOrEmpty(dest))
         {
@@ -494,11 +648,20 @@ public partial class Form1 : Form
             return;
         }
 
+        await ExecuteRobocopyAsync();
+    }
+
+    private async Task ExecuteRobocopyAsync()
+    {
         SetRunningState(true);
         rtbProgress.Clear();
         SetFixedLineSpacing(rtbProgress);
         _progressLineCount = 0;
         _errorCount = 0;
+
+        var source = txtSource.Text.Trim().Trim('"');
+        var dest = txtDest.Text.Trim().Trim('"');
+        var options = txtOptions.Text.Trim();
 
         var arguments = $"\"{source}\" \"{dest}\"";
         if (!string.IsNullOrEmpty(options))
@@ -659,6 +822,8 @@ public partial class Form1 : Form
         txtSource.ReadOnly = running;
         txtDest.ReadOnly = running;
         txtOptions.ReadOnly = running;
+        chkSchedule.Enabled = !running;
+        nudScheduleHours.Enabled = !running && chkSchedule.Checked;
     }
 
     #endregion
@@ -744,6 +909,9 @@ public partial class Form1 : Form
             txtSource.Text = s.Source ?? "";
             txtDest.Text = s.Dest ?? "";
             txtOptions.Text = s.Options ?? "";
+
+            chkSchedule.Checked = s.ScheduleEnabled;
+            nudScheduleHours.Value = Math.Clamp(s.ScheduleIntervalHours, 1, 24);
         }
         catch
         {
@@ -765,6 +933,8 @@ public partial class Form1 : Form
                 Source = txtSource.Text,
                 Dest = txtDest.Text,
                 Options = txtOptions.Text,
+                ScheduleEnabled = chkSchedule.Checked,
+                ScheduleIntervalHours = (int)nudScheduleHours.Value,
             };
             var json = JsonSerializer.Serialize(s, new JsonSerializerOptions { WriteIndented = true });
             File.WriteAllText(SettingsPath, json);
@@ -776,6 +946,15 @@ public partial class Form1 : Form
 
     private void Form1_FormClosing(object? sender, FormClosingEventArgs e)
     {
+        // ×ボタンによるクローズ → タスクトレイに格納
+        if (!_isExiting && e.CloseReason == CloseReason.UserClosing)
+        {
+            e.Cancel = true;
+            Hide();
+            return;
+        }
+
+        // 実際の終了処理
         if (_runningProcess != null && !_runningProcess.HasExited)
         {
             var result = MessageBox.Show("robocopyが実行中です。終了しますか？", "確認",
@@ -783,6 +962,7 @@ public partial class Form1 : Form
             if (result != DialogResult.Yes)
             {
                 e.Cancel = true;
+                _isExiting = false;
                 return;
             }
             try
@@ -792,6 +972,9 @@ public partial class Form1 : Form
             }
             catch { }
         }
+
+        notifyIcon.Visible = false;
+        StopSchedulerTimer();
         StopFlushTimer();
         SaveSettings();
     }
@@ -806,6 +989,8 @@ public partial class Form1 : Form
         public string? Source { get; set; }
         public string? Dest { get; set; }
         public string? Options { get; set; }
+        public bool ScheduleEnabled { get; set; }
+        public int ScheduleIntervalHours { get; set; } = 1;
     }
 
     #endregion
