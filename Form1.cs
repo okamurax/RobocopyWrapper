@@ -42,10 +42,16 @@ public partial class Form1 : Form
 
     // robocopyの出力からエラー行を判定するパターン
     private static readonly Regex ErrorLinePattern = new(
-        @"(ERROR\s|FAILED|エラー|^\s*\d{4}/\d{2}/\d{2}\s+\d{2}:\d{2}:\d{2}\s+ERROR|" +
+        @"(ERROR[\s:]|FAILED|エラー|^\s*\d{4}/\d{2}/\d{2}\s+\d{2}:\d{2}:\d{2}\s+ERROR|" +
         @"Retry\s+limit\s+exceeded|The\s+process\s+cannot|Access\s+is\s+denied|" +
+        @"Insufficient\s+disk\s+space|filename\s+or\s+extension\s+is\s+too\s+long|" +
+        @"Sharing\s+violation|cannot\s+find\s+the\s+path|cannot\s+find\s+the\s+file|" +
+        @"network\s+name\s+cannot\s+be\s+found|Logon\s+failure|" +
+        @"Cannot\s+create\s+a\s+file\s+when\s+that\s+file\s+already\s+exists|" +
         @"ファイルが見つかりません|アクセスが拒否|パスが見つかりません|" +
-        @"使用中のファイル|ネットワーク パスが見つかりません)",
+        @"使用中のファイル|ネットワーク パスが見つかりません|" +
+        @"ディスクに空き領域がありません|ファイル名または拡張子が長すぎます|" +
+        @"共有違反|指定されたパスが見つかりません|指定されたファイルが見つかりません)",
         RegexOptions.IgnoreCase | RegexOptions.Compiled);
 
     // robocopyのファイル/ディレクトリ操作行をパースするパターン
@@ -542,6 +548,24 @@ public partial class Form1 : Form
     {
         if (string.IsNullOrWhiteSpace(line))
             return ColorDefault;
+
+        // ファイル操作行はステータス部分だけで色を決める（ファイル名中のエラーキーワード誤検知防止）
+        var fm = RobocopyFileLinePattern.Match(line);
+        if (fm.Success)
+        {
+            var status = fm.Groups[1].Value;
+            if (status.Equals("FAILED", StringComparison.OrdinalIgnoreCase) ||
+                status.Equals("MISMATCH", StringComparison.OrdinalIgnoreCase))
+                return ColorError;
+            if (ExtraPattern.IsMatch(status))
+                return ColorExtra;
+            if (CopyingPattern.IsMatch(status))
+                return ColorCopying;
+            if (SkippedPattern.IsMatch(status))
+                return ColorSkipped;
+            return ColorDefault;
+        }
+
         if (ErrorLinePattern.IsMatch(line))
             return ColorError;
         if (ExtraPattern.IsMatch(line))
@@ -778,7 +802,13 @@ public partial class Form1 : Form
             {
                 if (args.Data == null) return;
                 _progressQueue.Enqueue(new LogEntry(args.Data, null, false));
-                if (ErrorLinePattern.IsMatch(args.Data))
+                // ファイル操作行はステータス部分だけで判定（ファイル名誤検知防止）
+                var fm = RobocopyFileLinePattern.Match(args.Data);
+                bool isError = fm.Success
+                    ? fm.Groups[1].Value.Equals("FAILED", StringComparison.OrdinalIgnoreCase) ||
+                      fm.Groups[1].Value.Equals("MISMATCH", StringComparison.OrdinalIgnoreCase)
+                    : ErrorLinePattern.IsMatch(args.Data);
+                if (isError)
                 {
                     Interlocked.Increment(ref _errorCount);
                     _errorQueue.Enqueue(args.Data);
