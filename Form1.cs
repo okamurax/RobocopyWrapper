@@ -25,6 +25,21 @@ public partial class Form1 : Form
     private System.Windows.Forms.Timer? _flushTimer;
     private int _errorCount;
 
+    // タスクトレイ
+    private bool _isExiting;
+    private bool _trayBalloonShown;
+
+    // スケジューラー
+    private System.Windows.Forms.Timer? _schedulerTimer;
+    private DateTime _nextScheduledTime = DateTime.MaxValue;
+    private DateTime _lastRunTime = DateTime.MinValue;
+
+    // 実行制御
+    // Kill/中止された場合は前回実行時刻を更新しない
+    private bool _wasKilled;
+    // フォーカス取得時のnudScheduleHoursの値（値未変更のLeaveでリセットしないため）
+    private decimal _nudValueOnEnter;
+
     // robocopyの出力からエラー行を判定するパターン
     private static readonly Regex ErrorLinePattern = new(
         @"(ERROR\s|FAILED|エラー|^\s*\d{4}/\d{2}/\d{2}\s+\d{2}:\d{2}:\d{2}\s+ERROR|" +
@@ -34,7 +49,6 @@ public partial class Form1 : Form
         RegexOptions.IgnoreCase | RegexOptions.Compiled);
 
     // robocopyのファイル/ディレクトリ操作行をパースするパターン
-    // サイズ: 整数のみ or 小数+単位(1.5 g等)。[kmgt]はドットの後のみ(G:\のGに誤マッチ防止)
     private static readonly Regex RobocopyFileLinePattern = new(
         @"^\s*(New File|Newer|Older|Same|Changed|Modified|\*EXTRA File|\*EXTRA Dir|New Dir|Extra Dir|MISMATCH|FAILED|" +
         @"新しいファイル|新しいディレクトリ|更新|同じ|変更済み)?\s+(\d+(?:\.\d+\s*[kmgt])?)\t(.+)$",
@@ -115,7 +129,6 @@ public partial class Form1 : Form
 
     private void SetFixedLineSpacing(RichTextBox rtb)
     {
-        // 空の状態でカーソル位置に書式を設定 → 以降の追記が継承する
         rtb.SelectionStart = 0;
         rtb.SelectionLength = 0;
         var pf = new PARAFORMAT2
@@ -123,7 +136,7 @@ public partial class Form1 : Form
             rgxTabs = new int[32],
             dwMask = PFM_LINESPACING,
             dyLineSpacing = LineSpacingTwips,
-            bLineSpacingRule = 4, // 固定行間
+            bLineSpacingRule = 4,
         };
         pf.cbSize = Marshal.SizeOf(pf);
 
@@ -161,7 +174,7 @@ public partial class Form1 : Form
         }
 
         var fontName = rtbProgress.Font.Name;
-        var fs = (int)(rtbProgress.Font.SizeInPoints * 2); // RTFは半ポイント単位
+        var fs = (int)(rtbProgress.Font.SizeInPoints * 2);
 
         var sb = new StringBuilder(entries.Count * 120);
         sb.Append(@"{\rtf1\ansi\deff0{\fonttbl{\f0 ").Append(fontName).Append(@";}}{\colortbl ;");
@@ -192,7 +205,7 @@ public partial class Form1 : Form
                     if (ch > 127)
                     {
                         int code = ch;
-                        if (code > 32767) code -= 65536; // RTFはsigned 16bit
+                        if (code > 32767) code -= 65536;
                         sb.Append(@"\u").Append(code).Append('?');
                     }
                     else
@@ -212,8 +225,227 @@ public partial class Form1 : Form
     {
         InitializeComponent();
         LoadSettings();
+        // LoadSettings後の実際の値で初期化（Enter未経由のLeaveで誤リセットしないため）
+        _nudValueOnEnter = nudScheduleHours.Value;
+
+        // パス変更時は即時保存（トレイ格納中の強制終了でも設定を保持）
+        txtSource.Leave += (_, _) => SaveSettings();
+        txtDest.Leave += (_, _) => SaveSettings();
+
+        // タスクトレイ設定（全初期化完了後にアイコン表示）
+        notifyIcon.Icon = this.Icon ?? SystemIcons.Application;
+        trayMenuShow.Click += TrayMenuShow_Click;
+        trayMenuExit.Click += TrayMenuExit_Click;
+        notifyIcon.DoubleClick += NotifyIcon_DoubleClick;
+        // バルーンチップをクリックしてもウィンドウを表示
+        notifyIcon.BalloonTipClicked += (_, _) => ShowForm();
+        notifyIcon.Visible = true;
+
+        // スケジュールイベントはLoadSettings後に接続（読み込み時の誤発火防止）
+        chkSchedule.CheckedChanged += ChkSchedule_CheckedChanged;
+        nudScheduleHours.ValueChanged += NudScheduleHours_ValueChanged;
+        nudScheduleHours.Leave += NudScheduleHours_Leave;
+        // フォーカス取得時の値を記録（値未変更のLeaveでリセットしないため）
+        nudScheduleHours.Enter += (_, _) => _nudValueOnEnter = nudScheduleHours.Value;
+        // Enterキーでもカウントダウンをリセット（Leaveが発火しないため）
+        nudScheduleHours.KeyDown += (s, e) =>
+        {
+            if (e.KeyCode == Keys.Enter)
+                NudScheduleHours_Leave(s, EventArgs.Empty);
+        };
+
+        // ロード済み設定でスケジューラーを初期化
+        nudScheduleHours.Enabled = chkSchedule.Checked;
+        if (chkSchedule.Checked)
+        {
+            // 前回実行時刻が記録されていれば、そこからn時間後を次回時刻に設定
+            // 前回からn時間以上経過している場合はリセット（今からn時間後）
+            // ※ 期限切れタスクを起動時に即時実行しない設計: バックグラウンドで
+            //   意図せず大量コピーが始まるリスクを避けるため意図的にスキップ
+            if (_lastRunTime != DateTime.MinValue)
+            {
+                var nextFromLast = _lastRunTime.AddHours((double)nudScheduleHours.Value);
+                _nextScheduledTime = nextFromLast > DateTime.Now
+                    ? nextFromLast
+                    : DateTime.Now.AddHours((double)nudScheduleHours.Value);
+            }
+            else
+            {
+                _nextScheduledTime = DateTime.Now.AddHours((double)nudScheduleHours.Value);
+            }
+            StartSchedulerTimer();
+            UpdateNextScheduleLabel();
+            this.Text = "Robocopy Wrapper [スケジュール待機中]";
+        }
+
         FormClosing += Form1_FormClosing;
     }
+
+    #region Task Tray
+
+    private void ShowForm()
+    {
+        Show();
+        if (WindowState == FormWindowState.Minimized)
+            WindowState = FormWindowState.Normal;
+        BringToFront();
+        Activate();
+    }
+
+    private void TrayMenuShow_Click(object? sender, EventArgs e) => ShowForm();
+
+    private void TrayMenuExit_Click(object? sender, EventArgs e)
+    {
+        _isExiting = true;
+        Application.Exit();
+    }
+
+    private void NotifyIcon_DoubleClick(object? sender, EventArgs e) => ShowForm();
+
+    #endregion
+
+    #region Scheduler
+
+    private void StartSchedulerTimer()
+    {
+        if (_schedulerTimer != null) return;
+        _schedulerTimer = new System.Windows.Forms.Timer { Interval = 30_000 }; // 30秒ごとにチェック
+        _schedulerTimer.Tick += SchedulerTimer_Tick;
+        _schedulerTimer.Start();
+    }
+
+    private void StopSchedulerTimer()
+    {
+        if (_schedulerTimer != null)
+        {
+            _schedulerTimer.Stop();
+            _schedulerTimer.Dispose();
+            _schedulerTimer = null;
+        }
+    }
+
+    private async void SchedulerTimer_Tick(object? sender, EventArgs e)
+    {
+        try
+        {
+            UpdateNextScheduleLabel();
+
+            if (DateTime.Now < _nextScheduledTime) return;
+
+            // スリープ復帰後に複数スロットが未消化でも1回だけ実行
+            var interval = TimeSpan.FromHours((double)nudScheduleHours.Value);
+            while (_nextScheduledTime <= DateTime.Now)
+                _nextScheduledTime = _nextScheduledTime.Add(interval);
+            UpdateNextScheduleLabel();
+
+            if (_runningProcess != null)
+            {
+                // 手動実行中 → スキップ（次回は上記で計算済みの時刻）
+                AppendProgressLineDirect(
+                    $"[{DateTime.Now:HH:mm:ss}] スケジュール実行をスキップ (実行中)", ColorInfo);
+                ScrollProgressToBottom();
+                return;
+            }
+
+            var source = txtSource.Text.Trim().Trim('"');
+            var dest = txtDest.Text.Trim().Trim('"');
+
+            if (string.IsNullOrEmpty(source) || string.IsNullOrEmpty(dest))
+            {
+                AppendProgressLineDirect(
+                    $"[{DateTime.Now:HH:mm:ss}] スケジュール実行をスキップ (コピー元/先が未設定)", ColorInfo);
+                ScrollProgressToBottom();
+                return;
+            }
+
+            // フォームが非表示の場合は開始をバルーンチップで通知
+            if (!this.Visible)
+                notifyIcon.ShowBalloonTip(2000, "Robocopy Wrapper",
+                    $"スケジュール実行を開始しました ({DateTime.Now:HH:mm})", ToolTipIcon.Info);
+
+            await ExecuteRobocopyAsync();
+        }
+        catch (Exception ex)
+        {
+            // フォームが破棄済みの場合はコントロール操作を試みない
+            if (IsDisposed) return;
+            AppendProgressLineDirect(
+                $"[{DateTime.Now:HH:mm:ss}] スケジューラーエラー: {ex.Message}", ColorError);
+            ScrollProgressToBottom();
+        }
+    }
+
+    private void UpdateNextScheduleLabel()
+    {
+        if (!chkSchedule.Checked || _nextScheduledTime == DateTime.MaxValue)
+        {
+            lblNextRun.Text = FormatLastRunTime();
+            notifyIcon.Text = "Robocopy Wrapper";
+            return;
+        }
+
+        var remaining = _nextScheduledTime - DateTime.Now;
+        if (remaining < TimeSpan.Zero) remaining = TimeSpan.Zero;
+
+        var hours = (int)remaining.TotalHours;
+        var minutes = remaining.Minutes;
+        var lastStr = FormatLastRunTime();
+        var prefix = lastStr.Length > 0 ? lastStr + "  " : "";
+        lblNextRun.Text = $"{prefix}次回: {_nextScheduledTime:HH:mm} (残り {hours:D2}:{minutes:D2})";
+
+        var trayText = $"Robocopy Wrapper - 次回: {_nextScheduledTime:HH:mm}";
+        notifyIcon.Text = trayText.Length <= 63 ? trayText : trayText[..63];
+    }
+
+    // 前回実行時刻を表示用にフォーマット（日をまたぐ場合は日付を付加）
+    private string FormatLastRunTime()
+    {
+        if (_lastRunTime == DateTime.MinValue) return "";
+        return _lastRunTime.Date == DateTime.Today
+            ? $"前回: {_lastRunTime:HH:mm}"
+            : $"前回: {_lastRunTime:M/d HH:mm}";
+    }
+
+    private void ChkSchedule_CheckedChanged(object? sender, EventArgs e)
+    {
+        nudScheduleHours.Enabled = chkSchedule.Checked;
+
+        if (chkSchedule.Checked)
+        {
+            _nextScheduledTime = DateTime.Now.AddHours((double)nudScheduleHours.Value);
+            StartSchedulerTimer();
+            UpdateNextScheduleLabel();
+            this.Text = "Robocopy Wrapper [スケジュール待機中]";
+        }
+        else
+        {
+            StopSchedulerTimer();
+            _nextScheduledTime = DateTime.MaxValue;
+            this.Text = "Robocopy Wrapper";
+            UpdateNextScheduleLabel(); // lblNextRun と notifyIcon.Text を一元更新
+        }
+
+        SaveSettings();
+    }
+
+    // 値変更時は設定保存のみ
+    private void NudScheduleHours_ValueChanged(object? sender, EventArgs e)
+    {
+        SaveSettings();
+    }
+
+    // フォーカスを外したとき、値が変わっていた場合のみカウントダウンをリセット
+    private void NudScheduleHours_Leave(object? sender, EventArgs e)
+    {
+        if (chkSchedule.Checked && nudScheduleHours.Value != _nudValueOnEnter)
+        {
+            _nextScheduledTime = DateTime.Now.AddHours((double)nudScheduleHours.Value);
+            UpdateNextScheduleLabel();
+        }
+        _nudValueOnEnter = nudScheduleHours.Value;
+    }
+
+    #endregion
 
     #region Drag & Drop
 
@@ -375,7 +607,6 @@ public partial class Form1 : Form
             return $"  {status,-14} {size,10}  {path}";
         }
 
-        // マッチしない行もタブを統一的に置換して列ズレを防ぐ
         return line.Replace("\t", "  ");
     }
 
@@ -387,7 +618,7 @@ public partial class Form1 : Form
         rtbProgress.SelectionStart = rtbProgress.TextLength;
         rtbProgress.SelectionLength = 0;
         rtbProgress.SelectionColor = color;
-        rtbProgress.SelectionFont = rtbProgress.Font; // 行の高さを統一
+        rtbProgress.SelectionFont = rtbProgress.Font;
         rtbProgress.AppendText(formatted + Environment.NewLine);
     }
 
@@ -412,15 +643,10 @@ public partial class Form1 : Form
         }
     }
 
-    // タイマーで定期的にバッファをフラッシュ
-    private void FlushTimer_Tick(object? sender, EventArgs e)
-    {
-        FlushBuffers();
-    }
+    private void FlushTimer_Tick(object? sender, EventArgs e) => FlushBuffers();
 
     private void FlushBuffers()
     {
-        // 進捗ログのフラッシュ (RTF一括挿入)
         if (!_progressQueue.IsEmpty)
         {
             var entries = new List<LogEntry>();
@@ -439,7 +665,6 @@ public partial class Form1 : Form
             }
         }
 
-        // エラーログのフラッシュ
         if (!_errorQueue.IsEmpty)
         {
             var sb = new StringBuilder();
@@ -466,7 +691,6 @@ public partial class Form1 : Form
             _flushTimer.Dispose();
             _flushTimer = null;
         }
-        // 残りのバッファをフラッシュ
         FlushBuffers();
     }
 
@@ -485,7 +709,6 @@ public partial class Form1 : Form
 
         var source = txtSource.Text.Trim().Trim('"');
         var dest = txtDest.Text.Trim().Trim('"');
-        var options = txtOptions.Text.Trim();
 
         if (string.IsNullOrEmpty(source) || string.IsNullOrEmpty(dest))
         {
@@ -494,11 +717,21 @@ public partial class Form1 : Form
             return;
         }
 
+        await ExecuteRobocopyAsync();
+    }
+
+    private async Task ExecuteRobocopyAsync()
+    {
+        _wasKilled = false;
         SetRunningState(true);
         rtbProgress.Clear();
         SetFixedLineSpacing(rtbProgress);
         _progressLineCount = 0;
         _errorCount = 0;
+
+        var source = txtSource.Text.Trim().Trim('"');
+        var dest = txtDest.Text.Trim().Trim('"');
+        var options = txtOptions.Text.Trim();
 
         var arguments = $"\"{source}\" \"{dest}\"";
         if (!string.IsNullOrEmpty(options))
@@ -529,10 +762,7 @@ public partial class Form1 : Form
             _runningProcess.OutputDataReceived += (s, args) =>
             {
                 if (args.Data == null) return;
-
-                // バッファに追加 (UIスレッドを使わない)
                 _progressQueue.Enqueue(new LogEntry(args.Data, null, false));
-
                 if (ErrorLinePattern.IsMatch(args.Data))
                 {
                     Interlocked.Increment(ref _errorCount);
@@ -556,8 +786,6 @@ public partial class Form1 : Form
 
             var exitCode = _runningProcess.ExitCode;
 
-            StopFlushTimer();
-
             if (exitCode >= 8)
             {
                 var exitMsg = exitCode switch
@@ -578,10 +806,26 @@ public partial class Form1 : Form
             AppendProgressLineDirect(finishLine, exitCode < 8 ? ColorCopying : ColorError);
             ScrollProgressToBottom();
             txtErrorLog.AppendText(Environment.NewLine + finishLine + Environment.NewLine);
+
+            // 正常終了（中止でない）場合のみ前回実行時刻を更新
+            if (!_wasKilled)
+            {
+                _lastRunTime = DateTime.Now;
+                SaveSettings();
+            }
+
+            // フォームが非表示かつ中止でない場合は完了をバルーンチップで通知
+            if (!this.Visible && !_wasKilled)
+            {
+                notifyIcon.ShowBalloonTip(3000, "Robocopy Wrapper",
+                    exitCode < 8
+                        ? $"バックアップが完了しました ({DateTime.Now:HH:mm})"
+                        : $"エラーが発生しました (終了コード: {exitCode})",
+                    exitCode < 8 ? ToolTipIcon.Info : ToolTipIcon.Error);
+            }
         }
         catch (Exception ex)
         {
-            StopFlushTimer();
             var msg = $"[例外] {ex.Message}";
             AppendProgressLineDirect(msg, ColorError);
             ScrollProgressToBottom();
@@ -589,11 +833,16 @@ public partial class Form1 : Form
         }
         finally
         {
-            StopFlushTimer();
-            _runningProcess?.Dispose();
-            _runningProcess = null;
-            _isPaused = false;
-            SetRunningState(false);
+            // フォーム破棄後にasync継続が実行された場合はコントロール操作を試みない
+            if (!IsDisposed)
+            {
+                StopFlushTimer();
+                _runningProcess?.Dispose();
+                _runningProcess = null;
+                _isPaused = false;
+                _wasKilled = false;
+                SetRunningState(false); // タイトル・Tooltip更新 + UpdateNextScheduleLabel を内部で呼ぶ
+            }
         }
     }
 
@@ -639,6 +888,7 @@ public partial class Form1 : Form
                 NtResumeProcess(_runningProcess.Handle);
                 _isPaused = false;
             }
+            _wasKilled = true;
             _runningProcess.Kill(entireProcessTree: true);
             _progressQueue.Enqueue(new LogEntry($"[{DateTime.Now:HH:mm:ss}] 中止しました", ColorError, false));
             _errorQueue.Enqueue($"[{DateTime.Now:HH:mm:ss}] 中止しました");
@@ -659,14 +909,26 @@ public partial class Form1 : Form
         txtSource.ReadOnly = running;
         txtDest.ReadOnly = running;
         txtOptions.ReadOnly = running;
+        chkSchedule.Enabled = !running;
+        nudScheduleHours.Enabled = !running && chkSchedule.Checked;
+
+        if (running)
+        {
+            this.Text = "Robocopy Wrapper [実行中]";
+            notifyIcon.Text = "Robocopy Wrapper - 実行中...";
+        }
+        else
+        {
+            this.Text = chkSchedule.Checked
+                ? "Robocopy Wrapper [スケジュール待機中]"
+                : "Robocopy Wrapper";
+            UpdateNextScheduleLabel(); // トレイTooltipも更新
+        }
     }
 
     #endregion
 
-    private void BtnClearLog_Click(object? sender, EventArgs e)
-    {
-        txtErrorLog.Clear();
-    }
+    private void BtnClearLog_Click(object? sender, EventArgs e) => txtErrorLog.Clear();
 
     // エラーログからパスを抽出するパターン (ドライブレター or UNCパス)
     private static readonly Regex PathPattern = new(
@@ -689,13 +951,9 @@ public partial class Form1 : Form
         try
         {
             if (File.Exists(path))
-            {
                 Process.Start("explorer.exe", $"/select,\"{path}\"");
-            }
             else if (Directory.Exists(path))
-            {
                 Process.Start("explorer.exe", $"\"{path}\"");
-            }
             else
             {
                 var dir = Path.GetDirectoryName(path);
@@ -744,6 +1002,14 @@ public partial class Form1 : Form
             txtSource.Text = s.Source ?? "";
             txtDest.Text = s.Dest ?? "";
             txtOptions.Text = s.Options ?? "";
+
+            chkSchedule.Checked = s.ScheduleEnabled;
+            nudScheduleHours.Value = Math.Clamp(s.ScheduleIntervalHours, 1, 24);
+
+            if (s.LastRunTime.HasValue)
+                _lastRunTime = s.LastRunTime.Value;
+
+            _trayBalloonShown = s.TrayBalloonShown;
         }
         catch
         {
@@ -765,6 +1031,10 @@ public partial class Form1 : Form
                 Source = txtSource.Text,
                 Dest = txtDest.Text,
                 Options = txtOptions.Text,
+                ScheduleEnabled = chkSchedule.Checked,
+                ScheduleIntervalHours = (int)nudScheduleHours.Value,
+                LastRunTime = _lastRunTime == DateTime.MinValue ? null : _lastRunTime,
+                TrayBalloonShown = _trayBalloonShown,
             };
             var json = JsonSerializer.Serialize(s, new JsonSerializerOptions { WriteIndented = true });
             File.WriteAllText(SettingsPath, json);
@@ -776,22 +1046,59 @@ public partial class Form1 : Form
 
     private void Form1_FormClosing(object? sender, FormClosingEventArgs e)
     {
+        // ×ボタンによるクローズ → タスクトレイに格納
+        if (!_isExiting && e.CloseReason == CloseReason.UserClosing)
+        {
+            e.Cancel = true;
+            Hide();
+            // 初回のみバルーンチップでトレイ格納を案内（右クリック操作も含めて案内）
+            if (!_trayBalloonShown)
+            {
+                notifyIcon.ShowBalloonTip(3000, "Robocopy Wrapper",
+                    "タスクトレイに格納されました。ダブルクリックで再表示、右クリックで終了できます。",
+                    ToolTipIcon.Info);
+                _trayBalloonShown = true;
+                SaveSettings();
+            }
+            return;
+        }
+
+        // 実際の終了処理
         if (_runningProcess != null && !_runningProcess.HasExited)
         {
-            var result = MessageBox.Show("robocopyが実行中です。終了しますか？", "確認",
-                MessageBoxButtons.YesNo, MessageBoxIcon.Warning);
-            if (result != DialogResult.Yes)
+            // シャットダウン時は確認なしで強制終了（ダイアログでブロックしない）
+            if (e.CloseReason == CloseReason.WindowsShutDown)
             {
-                e.Cancel = true;
-                return;
+                try
+                {
+                    if (_isPaused) NtResumeProcess(_runningProcess.Handle);
+                    _wasKilled = true;
+                    _runningProcess.Kill(entireProcessTree: true);
+                }
+                catch { }
             }
-            try
+            else
             {
-                if (_isPaused) NtResumeProcess(_runningProcess.Handle);
-                _runningProcess.Kill(entireProcessTree: true);
+                var result = MessageBox.Show("robocopyが実行中です。終了しますか？", "確認",
+                    MessageBoxButtons.YesNo, MessageBoxIcon.Warning);
+                if (result != DialogResult.Yes)
+                {
+                    e.Cancel = true;
+                    _isExiting = false;
+                    return;
+                }
+                try
+                {
+                    if (_isPaused) NtResumeProcess(_runningProcess.Handle);
+                    _wasKilled = true;
+                    _runningProcess.Kill(entireProcessTree: true);
+                }
+                catch { }
             }
-            catch { }
         }
+
+        notifyIcon.Visible = false;
+        StopSchedulerTimer();
         StopFlushTimer();
         SaveSettings();
     }
@@ -806,6 +1113,10 @@ public partial class Form1 : Form
         public string? Source { get; set; }
         public string? Dest { get; set; }
         public string? Options { get; set; }
+        public bool ScheduleEnabled { get; set; }
+        public int ScheduleIntervalHours { get; set; } = 1;
+        public DateTime? LastRunTime { get; set; }
+        public bool TrayBalloonShown { get; set; }
     }
 
     #endregion

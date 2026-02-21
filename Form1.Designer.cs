@@ -17,6 +17,7 @@ partial class Form1
 
     private void InitializeComponent()
     {
+        components = new System.ComponentModel.Container();
         lblSource = new Label();
         txtSource = new TextBox();
         btnBrowseSource = new Button();
@@ -28,12 +29,21 @@ partial class Form1
         btnExecute = new Button();
         btnPause = new Button();
         btnStop = new Button();
+        chkSchedule = new CheckBox();
+        nudScheduleHours = new NumericUpDown();
+        lblScheduleUnit = new Label();
+        lblNextRun = new Label();
+        trayContextMenu = new ContextMenuStrip(components);
+        trayMenuShow = new ToolStripMenuItem();
+        trayMenuExit = new ToolStripMenuItem();
+        notifyIcon = new NotifyIcon(components);
         splitContainer = new SplitContainer();
         lblProgress = new Label();
         rtbProgress = new RichTextBox();
         lblErrorLog = new Label();
         btnClearLog = new Button();
         txtErrorLog = new TextBox();
+        ((System.ComponentModel.ISupportInitialize)nudScheduleHours).BeginInit();
         SuspendLayout();
 
         // lblSource
@@ -107,6 +117,46 @@ partial class Form1
         btnStop.Enabled = false;
         btnStop.Click += BtnStop_Click;
 
+        // chkSchedule
+        chkSchedule.AutoSize = true;
+        chkSchedule.Location = new Point(220, 111);
+        chkSchedule.Text = "定期実行";
+
+        // nudScheduleHours
+        nudScheduleHours.Location = new Point(305, 108);
+        nudScheduleHours.Size = new Size(55, 25);
+        nudScheduleHours.Minimum = 1;
+        nudScheduleHours.Maximum = 24;
+        nudScheduleHours.Value = 1;
+        nudScheduleHours.Enabled = false;
+
+        // lblScheduleUnit
+        lblScheduleUnit.AutoSize = true;
+        lblScheduleUnit.Location = new Point(365, 111);
+        lblScheduleUnit.Text = "時間ごと";
+
+        // lblNextRun
+        lblNextRun.Anchor = AnchorStyles.Top | AnchorStyles.Right;
+        lblNextRun.TextAlign = ContentAlignment.MiddleRight;
+        lblNextRun.Location = new Point(445, 111);
+        lblNextRun.Size = new Size(327, 16);
+        lblNextRun.Text = "";
+
+        // trayContextMenu
+        trayMenuShow.Text = "表示";
+        trayMenuExit.Text = "終了";
+        trayContextMenu.Items.AddRange(new ToolStripItem[]
+        {
+            trayMenuShow,
+            new ToolStripSeparator(),
+            trayMenuExit,
+        });
+
+        // notifyIcon (Visibleはコンストラクタで全初期化完了後に設定)
+        notifyIcon.Text = "Robocopy Wrapper";
+        notifyIcon.ContextMenuStrip = trayContextMenu;
+        notifyIcon.Visible = false;
+
         // splitContainer
         splitContainer.Anchor = AnchorStyles.Top | AnchorStyles.Bottom | AnchorStyles.Left | AnchorStyles.Right;
         splitContainer.Location = new Point(12, 140);
@@ -176,9 +226,14 @@ partial class Form1
         Controls.Add(btnExecute);
         Controls.Add(btnPause);
         Controls.Add(btnStop);
+        Controls.Add(chkSchedule);
+        Controls.Add(nudScheduleHours);
+        Controls.Add(lblScheduleUnit);
+        Controls.Add(lblNextRun);
         Controls.Add(splitContainer);
         MinimumSize = new Size(500, 400);
         Text = "Robocopy Wrapper";
+        ((System.ComponentModel.ISupportInitialize)nudScheduleHours).EndInit();
         ResumeLayout(false);
         PerformLayout();
     }
@@ -209,6 +264,14 @@ partial class Form1
     private Button btnExecute;
     private Button btnPause;
     private Button btnStop;
+    private CheckBox chkSchedule;
+    private NumericUpDown nudScheduleHours;
+    private Label lblScheduleUnit;
+    private Label lblNextRun;
+    private NotifyIcon notifyIcon;
+    private ContextMenuStrip trayContextMenu;
+    private ToolStripMenuItem trayMenuShow;
+    private ToolStripMenuItem trayMenuExit;
     private SplitContainer splitContainer;
     private Label lblProgress;
     private RichTextBox rtbProgress;
