@@ -152,10 +152,10 @@ partial class Form1
             trayMenuExit,
         });
 
-        // notifyIcon
+        // notifyIcon (Visibleはコンストラクタで全初期化完了後に設定)
         notifyIcon.Text = "Robocopy Wrapper";
         notifyIcon.ContextMenuStrip = trayContextMenu;
-        notifyIcon.Visible = true;
+        notifyIcon.Visible = false;
 
         // splitContainer
         splitContainer.Anchor = AnchorStyles.Top | AnchorStyles.Bottom | AnchorStyles.Left | AnchorStyles.Right;
