@@ -326,6 +326,8 @@ public partial class Form1 : Form
 
     private async void SchedulerTimer_Tick(object? sender, EventArgs e)
     {
+        // フォーム破棄直後にTickが発火してもUIアクセスしない
+        if (IsDisposed) return;
         try
         {
             UpdateNextScheduleLabel();
