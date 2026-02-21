@@ -594,6 +594,21 @@ public partial class Form1 : Form
         return rawSize;
     }
 
+    // モノスペースフォントでの表示幅（全角文字は2として計算）
+    private static int GetVisualWidth(string s)
+    {
+        int w = 0;
+        foreach (var c in s)
+            w += c >= 0x3000 ? 2 : 1;
+        return w;
+    }
+
+    private static string PadRightVisual(string s, int targetWidth)
+    {
+        int spaces = targetWidth - GetVisualWidth(s);
+        return spaces > 0 ? s + new string(' ', spaces) : s;
+    }
+
     private static string FormatRobocopyLine(string line)
     {
         var match = RobocopyFileLinePattern.Match(line);
@@ -603,10 +618,8 @@ public partial class Form1 : Form
             var size = FormatFileSize(match.Groups[2].Value);
             var path = match.Groups[3].Value.Trim();
 
-            if (string.IsNullOrEmpty(status))
-                status = "";
-
-            return $"  {status,-14} {size,10}  {path}";
+            // 全角文字対応パディング（最長の「新しいディレクトリ」= 18 視覚幅に合わせる）
+            return $"  {PadRightVisual(status, 18)} {size,10}  {path}";
         }
 
         return line.Replace("\t", "  ");
