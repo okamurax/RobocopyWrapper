@@ -225,6 +225,12 @@ public partial class Form1 : Form
     {
         InitializeComponent();
         LoadSettings();
+        // LoadSettings後の実際の値で初期化（Enter未経由のLeaveで誤リセットしないため）
+        _nudValueOnEnter = nudScheduleHours.Value;
+
+        // パス変更時は即時保存（トレイ格納中の強制終了でも設定を保持）
+        txtSource.Leave += (_, _) => SaveSettings();
+        txtDest.Leave += (_, _) => SaveSettings();
 
         // タスクトレイ設定（全初期化完了後にアイコン表示）
         notifyIcon.Icon = this.Icon ?? SystemIcons.Application;
@@ -415,9 +421,8 @@ public partial class Form1 : Form
         {
             StopSchedulerTimer();
             _nextScheduledTime = DateTime.MaxValue;
-            lblNextRun.Text = FormatLastRunTime();
             this.Text = "Robocopy Wrapper";
-            notifyIcon.Text = "Robocopy Wrapper";
+            UpdateNextScheduleLabel(); // lblNextRun と notifyIcon.Text を一元更新
         }
 
         SaveSettings();
@@ -781,8 +786,6 @@ public partial class Form1 : Form
 
             var exitCode = _runningProcess.ExitCode;
 
-            StopFlushTimer();
-
             if (exitCode >= 8)
             {
                 var exitMsg = exitCode switch
@@ -811,8 +814,8 @@ public partial class Form1 : Form
                 SaveSettings();
             }
 
-            // フォームが非表示の場合は完了をバルーンチップで通知
-            if (!this.Visible)
+            // フォームが非表示かつ中止でない場合は完了をバルーンチップで通知
+            if (!this.Visible && !_wasKilled)
             {
                 notifyIcon.ShowBalloonTip(3000, "Robocopy Wrapper",
                     exitCode < 8
@@ -830,12 +833,16 @@ public partial class Form1 : Form
         }
         finally
         {
-            StopFlushTimer();
-            _runningProcess?.Dispose();
-            _runningProcess = null;
-            _isPaused = false;
-            _wasKilled = false;
-            SetRunningState(false); // タイトル・Tooltip更新 + UpdateNextScheduleLabel を内部で呼ぶ
+            // フォーム破棄後にasync継続が実行された場合はコントロール操作を試みない
+            if (!IsDisposed)
+            {
+                StopFlushTimer();
+                _runningProcess?.Dispose();
+                _runningProcess = null;
+                _isPaused = false;
+                _wasKilled = false;
+                SetRunningState(false); // タイトル・Tooltip更新 + UpdateNextScheduleLabel を内部で呼ぶ
+            }
         }
     }
 
