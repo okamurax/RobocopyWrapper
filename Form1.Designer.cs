@@ -47,6 +47,8 @@ partial class Form1
         lblErrorLog = new Label();
         btnClearLog = new Button();
         txtErrorLog = new TextBox();
+        btnVerify = new Button();
+        btnVerifyStop = new Button();
         ((System.ComponentModel.ISupportInitialize)nudScheduleHours).BeginInit();
         ((System.ComponentModel.ISupportInitialize)splitContainer).BeginInit();
         splitContainer.SuspendLayout();
@@ -147,7 +149,7 @@ partial class Form1
         lblNextRun.Anchor = AnchorStyles.Top | AnchorStyles.Right;
         lblNextRun.TextAlign = ContentAlignment.MiddleRight;
         lblNextRun.Location = new Point(445, 111);
-        lblNextRun.Size = new Size(327, 16);
+        lblNextRun.Size = new Size(235, 16);
         lblNextRun.Text = "";
 
         // trayContextMenu
@@ -164,6 +166,21 @@ partial class Form1
         notifyIcon.Text = "Robocopy Wrapper";
         notifyIcon.ContextMenuStrip = trayContextMenu;
         notifyIcon.Visible = false;
+
+        // btnVerify
+        btnVerify.Anchor = AnchorStyles.Top | AnchorStyles.Right;
+        btnVerify.Location = new Point(686, 108);
+        btnVerify.Size = new Size(86, 25);
+        btnVerify.Text = "検証";
+        btnVerify.Click += BtnVerify_Click;
+
+        // btnVerifyStop
+        btnVerifyStop.Anchor = AnchorStyles.Top | AnchorStyles.Right;
+        btnVerifyStop.Location = new Point(686, 108);
+        btnVerifyStop.Size = new Size(86, 25);
+        btnVerifyStop.Text = "検証中止";
+        btnVerifyStop.Visible = false;
+        btnVerifyStop.Click += BtnVerifyStop_Click;
 
         // splitContainer
         splitContainer.Anchor = AnchorStyles.Top | AnchorStyles.Bottom | AnchorStyles.Left | AnchorStyles.Right;
@@ -279,6 +296,8 @@ partial class Form1
         Controls.Add(nudScheduleHours);
         Controls.Add(lblScheduleUnit);
         Controls.Add(lblNextRun);
+        Controls.Add(btnVerify);
+        Controls.Add(btnVerifyStop);
         Controls.Add(splitContainer);
         MinimumSize = new Size(500, 400);
         Text = "Robocopy Wrapper";
@@ -335,4 +354,6 @@ partial class Form1
     private Label lblErrorLog;
     private Button btnClearLog;
     private TextBox txtErrorLog;
+    private Button btnVerify;
+    private Button btnVerifyStop;
 }

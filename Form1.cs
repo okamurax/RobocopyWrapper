@@ -1,6 +1,7 @@
 using System.Collections.Concurrent;
 using System.Diagnostics;
 using System.Runtime.InteropServices;
+using System.Security.Cryptography;
 using System.Text;
 using System.Text.Json;
 using System.Text.RegularExpressions;
@@ -38,6 +39,9 @@ public partial class Form1 : Form
     // 実行制御
     // Kill/中止された場合は前回実行時刻を更新しない
     private bool _wasKilled;
+    // チェックサム検証
+    private CancellationTokenSource? _verifyCts;
+    private bool _isVerifying;
     // フォーカス取得時のnudScheduleHoursの値（値未変更のLeaveでリセットしないため）
     private decimal _nudValueOnEnter;
 
@@ -352,11 +356,12 @@ public partial class Form1 : Form
                 _nextScheduledTime = _nextScheduledTime.Add(interval);
             UpdateNextScheduleLabel();
 
-            if (_runningProcess != null)
+            if (_runningProcess != null || _isVerifying)
             {
-                // 手動実行中 → スキップ（次回は上記で計算済みの時刻）
+                // 手動実行中/検証中 → スキップ（次回は上記で計算済みの時刻）
+                var reason = _isVerifying ? "検証中" : "実行中";
                 AppendProgressLineDirect(
-                    $"[{DateTime.Now:HH:mm:ss}] スケジュール実行をスキップ (実行中)", ColorInfo);
+                    $"[{DateTime.Now:HH:mm:ss}] スケジュール実行をスキップ ({reason})", ColorInfo);
                 ScrollProgressToBottom();
                 return;
             }
@@ -745,7 +750,7 @@ public partial class Form1 : Form
 
     private async void BtnExecute_Click(object? sender, EventArgs e)
     {
-        if (_runningProcess != null)
+        if (_runningProcess != null || _isVerifying)
         {
             MessageBox.Show("既に実行中です。完了までお待ちください。", "実行中",
                 MessageBoxButtons.OK, MessageBoxIcon.Warning);
@@ -972,16 +977,19 @@ public partial class Form1 : Form
 
     private void SetRunningState(bool running)
     {
-        btnExecute.Enabled = !running;
+        btnExecute.Enabled = !running && !_isVerifying;
         btnExecute.Text = running ? "実行中..." : "実行";
         btnPause.Enabled = running;
         btnStop.Enabled = running;
         btnPause.Text = "一時停止";
-        txtSource.ReadOnly = running;
-        txtDest.ReadOnly = running;
+        btnVerify.Enabled = !running && !_isVerifying;
+        btnVerify.Visible = !_isVerifying;
+        btnVerifyStop.Visible = _isVerifying;
+        txtSource.ReadOnly = running || _isVerifying;
+        txtDest.ReadOnly = running || _isVerifying;
         txtOptions.ReadOnly = running;
-        chkSchedule.Enabled = !running;
-        nudScheduleHours.Enabled = !running && chkSchedule.Checked;
+        chkSchedule.Enabled = !running && !_isVerifying;
+        nudScheduleHours.Enabled = !running && !_isVerifying && chkSchedule.Checked;
 
         if (running)
         {
@@ -995,6 +1003,203 @@ public partial class Form1 : Form
                 : "Robocopy Wrapper";
             UpdateNextScheduleLabel(); // トレイTooltipも更新
         }
+    }
+
+    #endregion
+
+    #region Checksum Verification
+
+    private async void BtnVerify_Click(object? sender, EventArgs e)
+    {
+        if (_runningProcess != null || _isVerifying) return;
+
+        var source = txtSource.Text.Trim().Trim('"');
+        var dest = txtDest.Text.Trim().Trim('"');
+
+        if (string.IsNullOrEmpty(source) || string.IsNullOrEmpty(dest))
+        {
+            MessageBox.Show("コピー元とコピー先を指定してください。", "入力エラー",
+                MessageBoxButtons.OK, MessageBoxIcon.Warning);
+            return;
+        }
+
+        if (!Directory.Exists(source))
+        {
+            MessageBox.Show($"コピー元が見つかりません:\n{source}", "エラー",
+                MessageBoxButtons.OK, MessageBoxIcon.Warning);
+            return;
+        }
+
+        _isVerifying = true;
+        SetRunningState(false); // UI更新（btnVerify/btnVerifyStop切替、btnExecute無効化）
+        this.Text = "Robocopy Wrapper [検証中]";
+        notifyIcon.Text = "Robocopy Wrapper - 検証中...";
+
+        rtbProgress.Clear();
+        SetFixedLineSpacing(rtbProgress);
+        _progressLineCount = 0;
+        txtCopyResult.Clear();
+
+        StartFlushTimer();
+        _verifyCts = new CancellationTokenSource();
+
+        try
+        {
+            await VerifyChecksumsAsync(source, dest, _verifyCts.Token);
+        }
+        catch (OperationCanceledException)
+        {
+            _progressQueue.Enqueue(new LogEntry(
+                $"[{DateTime.Now:HH:mm:ss}] 検証を中止しました", ColorError, false));
+        }
+        catch (Exception ex)
+        {
+            _progressQueue.Enqueue(new LogEntry(
+                $"[{DateTime.Now:HH:mm:ss}] 検証エラー: {ex.Message}", ColorError, false));
+        }
+        finally
+        {
+            StopFlushTimer();
+            _verifyCts?.Dispose();
+            _verifyCts = null;
+            _isVerifying = false;
+            if (!IsDisposed)
+            {
+                SetRunningState(false);
+            }
+        }
+    }
+
+    private void BtnVerifyStop_Click(object? sender, EventArgs e)
+    {
+        _verifyCts?.Cancel();
+    }
+
+    private async Task VerifyChecksumsAsync(string source, string dest, CancellationToken ct)
+    {
+        _progressQueue.Enqueue(new LogEntry(
+            $"[{DateTime.Now:HH:mm:ss}] チェックサム検証開始: {source} ↔ {dest}", ColorInfo, false));
+        _progressQueue.Enqueue(new LogEntry(new string('─', 70), ColorSeparator, false));
+
+        var sw = Stopwatch.StartNew();
+        var mismatchCount = 0;
+        var missingInDestCount = 0;
+        var missingInSourceCount = 0;
+        var matchCount = 0;
+        var errorCount = 0;
+
+        // ソース側のファイル列挙
+        _progressQueue.Enqueue(new LogEntry(
+            $"[{DateTime.Now:HH:mm:ss}] ファイルを列挙中...", ColorInfo, false));
+
+        var sourceFiles = await Task.Run(() =>
+        {
+            ct.ThrowIfCancellationRequested();
+            return Directory.EnumerateFiles(source, "*", SearchOption.AllDirectories)
+                .Select(f => f[(source.Length + 1)..]) // 相対パス
+                .ToList();
+        }, ct);
+
+        _progressQueue.Enqueue(new LogEntry(
+            $"[{DateTime.Now:HH:mm:ss}] ソース: {sourceFiles.Count:#,0} ファイル", ColorInfo, false));
+
+        // バックグラウンドでハッシュ比較
+        var total = sourceFiles.Count;
+        var processed = 0;
+
+        await Task.Run(() =>
+        {
+            foreach (var relPath in sourceFiles)
+            {
+                ct.ThrowIfCancellationRequested();
+
+                var srcPath = Path.Combine(source, relPath);
+                var dstPath = Path.Combine(dest, relPath);
+
+                processed++;
+                if (processed % 100 == 0 || processed == total)
+                {
+                    _progressQueue.Enqueue(new LogEntry(
+                        $"[{DateTime.Now:HH:mm:ss}] 検証中... {processed:#,0}/{total:#,0} ({100.0 * processed / total:F1}%)",
+                        ColorInfo, false));
+                }
+
+                if (!File.Exists(dstPath))
+                {
+                    missingInDestCount++;
+                    _copyResultQueue.Enqueue($"[デスト欠落] {relPath}");
+                    continue;
+                }
+
+                try
+                {
+                    var srcHash = ComputeFileHash(srcPath);
+                    ct.ThrowIfCancellationRequested();
+                    var dstHash = ComputeFileHash(dstPath);
+
+                    if (!srcHash.SequenceEqual(dstHash))
+                    {
+                        mismatchCount++;
+                        _copyResultQueue.Enqueue($"[不一致] {relPath}");
+                    }
+                    else
+                    {
+                        matchCount++;
+                    }
+                }
+                catch (OperationCanceledException) { throw; }
+                catch (Exception ex)
+                {
+                    errorCount++;
+                    _copyResultQueue.Enqueue($"[エラー] {relPath}: {ex.Message}");
+                }
+            }
+        }, ct);
+
+        // デスト側にしかないファイルを検出
+        _progressQueue.Enqueue(new LogEntry(
+            $"[{DateTime.Now:HH:mm:ss}] デスト側の余剰ファイルを確認中...", ColorInfo, false));
+
+        if (Directory.Exists(dest))
+        {
+            var destOnlyFiles = await Task.Run(() =>
+            {
+                ct.ThrowIfCancellationRequested();
+                var sourceSet = new HashSet<string>(sourceFiles, StringComparer.OrdinalIgnoreCase);
+                return Directory.EnumerateFiles(dest, "*", SearchOption.AllDirectories)
+                    .Select(f => f[(dest.Length + 1)..])
+                    .Where(rel => !sourceSet.Contains(rel))
+                    .ToList();
+            }, ct);
+
+            foreach (var rel in destOnlyFiles)
+            {
+                missingInSourceCount++;
+                _copyResultQueue.Enqueue($"[ソース欠落] {rel}");
+            }
+        }
+
+        sw.Stop();
+        var elapsed = sw.Elapsed;
+        var summary = $"── {DateTime.Now:yyyy/MM/dd HH:mm:ss} 検証完了 " +
+            $"(一致: {matchCount:#,0}, 不一致: {mismatchCount:#,0}, " +
+            $"デスト欠落: {missingInDestCount:#,0}, ソース欠落: {missingInSourceCount:#,0}, " +
+            $"エラー: {errorCount:#,0}, " +
+            $"所要時間: {elapsed.Hours:D2}:{elapsed.Minutes:D2}:{elapsed.Seconds:D2}) ──";
+
+        var summaryColor = (mismatchCount + missingInDestCount + missingInSourceCount + errorCount) == 0
+            ? ColorCopying : ColorError;
+
+        _progressQueue.Enqueue(new LogEntry(summary, summaryColor, false));
+
+        if (mismatchCount + missingInDestCount + missingInSourceCount + errorCount == 0)
+            _copyResultQueue.Enqueue("すべてのファイルが一致しました。");
+    }
+
+    private static byte[] ComputeFileHash(string path)
+    {
+        using var stream = new FileStream(path, FileMode.Open, FileAccess.Read, FileShare.Read, 1024 * 1024);
+        return SHA256.HashData(stream);
     }
 
     #endregion
