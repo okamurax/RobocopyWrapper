@@ -48,6 +48,10 @@ partial class Form1
         btnClearLog = new Button();
         txtErrorLog = new TextBox();
         ((System.ComponentModel.ISupportInitialize)nudScheduleHours).BeginInit();
+        ((System.ComponentModel.ISupportInitialize)splitContainer).BeginInit();
+        splitContainer.SuspendLayout();
+        ((System.ComponentModel.ISupportInitialize)splitContainerInner).BeginInit();
+        splitContainerInner.SuspendLayout();
         SuspendLayout();
 
         // lblSource
@@ -170,13 +174,11 @@ partial class Form1
         splitContainer.SplitterWidth = 6;
 
         // --- Panel1: 進捗ログ ---
-        lblProgress = new Label();
         lblProgress.AutoSize = true;
         lblProgress.Text = "進捗ログ:";
         lblProgress.Location = new Point(0, 0);
         lblProgress.Dock = DockStyle.Top;
 
-        rtbProgress = new RichTextBox();
         rtbProgress.ReadOnly = true;
         rtbProgress.WordWrap = false;
         rtbProgress.BackColor = System.Drawing.Color.FromArgb(20, 20, 30);
@@ -193,18 +195,18 @@ partial class Form1
         splitContainerInner.Orientation = Orientation.Horizontal;
         splitContainerInner.SplitterDistance = 80;
         splitContainerInner.SplitterWidth = 6;
+        splitContainerInner.Panel1MinSize = 50;
+        splitContainerInner.Panel2MinSize = 50;
 
         // -- コピー結果ログ (splitContainerInner.Panel1) --
         var pnlCopyResultHeader = new Panel();
         pnlCopyResultHeader.Dock = DockStyle.Top;
         pnlCopyResultHeader.Height = 23;
 
-        lblCopyResult = new Label();
         lblCopyResult.AutoSize = true;
         lblCopyResult.Text = "コピー結果:";
         lblCopyResult.Location = new Point(0, 4);
 
-        btnClearCopyResult = new Button();
         btnClearCopyResult.Size = new Size(75, 23);
         btnClearCopyResult.Text = "クリア";
         btnClearCopyResult.Dock = DockStyle.Right;
@@ -213,7 +215,6 @@ partial class Form1
         pnlCopyResultHeader.Controls.Add(lblCopyResult);
         pnlCopyResultHeader.Controls.Add(btnClearCopyResult);
 
-        txtCopyResult = new TextBox();
         txtCopyResult.Multiline = true;
         txtCopyResult.ReadOnly = true;
         txtCopyResult.ScrollBars = ScrollBars.Both;
@@ -232,12 +233,10 @@ partial class Form1
         pnlErrorHeader.Dock = DockStyle.Top;
         pnlErrorHeader.Height = 23;
 
-        lblErrorLog = new Label();
         lblErrorLog.AutoSize = true;
         lblErrorLog.Text = "エラーログ:";
         lblErrorLog.Location = new Point(0, 4);
 
-        btnClearLog = new Button();
         btnClearLog.Size = new Size(75, 23);
         btnClearLog.Text = "クリア";
         btnClearLog.Dock = DockStyle.Right;
@@ -246,7 +245,6 @@ partial class Form1
         pnlErrorHeader.Controls.Add(lblErrorLog);
         pnlErrorHeader.Controls.Add(btnClearLog);
 
-        txtErrorLog = new TextBox();
         txtErrorLog.Multiline = true;
         txtErrorLog.ReadOnly = true;
         txtErrorLog.ScrollBars = ScrollBars.Both;
@@ -285,6 +283,10 @@ partial class Form1
         MinimumSize = new Size(500, 400);
         Text = "Robocopy Wrapper";
         ((System.ComponentModel.ISupportInitialize)nudScheduleHours).EndInit();
+        splitContainerInner.ResumeLayout(false);
+        ((System.ComponentModel.ISupportInitialize)splitContainerInner).EndInit();
+        splitContainer.ResumeLayout(false);
+        ((System.ComponentModel.ISupportInitialize)splitContainer).EndInit();
         ResumeLayout(false);
         PerformLayout();
     }

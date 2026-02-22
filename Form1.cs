@@ -191,7 +191,7 @@ public partial class Form1 : Form
 
         foreach (var (text, ci) in lines)
         {
-            sb.Append($@"\pard\tqr\tx{TabStopSize}\tx{TabStopPath}\sl-{LineSpacingTwips}\slmult0\cf{ci}\f0\fs{fs} ");
+            sb.Append($@"\pard\tqr\tx{TabStopSize}\tql\tx{TabStopPath}\sl-{LineSpacingTwips}\slmult0\cf{ci}\f0\fs{fs} ");
             AppendRtfEscaped(sb, text);
             sb.Append(@"\par");
         }
@@ -866,7 +866,9 @@ public partial class Form1 : Form
             var finishLine = $"── {DateTime.Now:yyyy/MM/dd HH:mm:ss} {summary} ──";
             AppendProgressLineDirect(finishLine, exitCode < 8 ? ColorCopying : ColorError);
             ScrollProgressToBottom();
-            txtCopyResult.AppendText(Environment.NewLine + finishLine + Environment.NewLine);
+            if (txtCopyResult.TextLength > 0)
+                txtCopyResult.AppendText(Environment.NewLine);
+            txtCopyResult.AppendText(finishLine + Environment.NewLine);
             txtErrorLog.AppendText(Environment.NewLine + finishLine + Environment.NewLine);
 
             // 正常終了（中止でない）場合のみ前回実行時刻を更新
