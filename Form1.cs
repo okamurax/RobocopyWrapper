@@ -62,16 +62,16 @@ public partial class Form1 : Form
     // robocopyのファイル/ディレクトリ操作行をパースするパターン
     private static readonly Regex RobocopyFileLinePattern = new(
         @"^\s*(New File|Newer|Older|Same|Changed|Modified|\*EXTRA File|\*EXTRA Dir|New Dir|Extra Dir|MISMATCH|FAILED|" +
-        @"新しいファイル|新しいディレクトリ|更新|同じ|変更済み)?\s+(\d+(?:\.\d+\s*[kmgt])?)\t(.+)$",
+        @"新しいファイル|新しいディレクトリ|新しい|古い|同じ|変更済み|更新済み)?\s+(\d+(?:\.\d+\s*[kmgt])?)\t(.+)$",
         RegexOptions.IgnoreCase | RegexOptions.Compiled);
 
     // 行の種別判定用パターン
     private static readonly Regex CopyingPattern = new(
-        @"(New File|New Dir|Newer|新しいファイル|新しいディレクトリ|更新)",
+        @"(New File|New Dir|Newer|新しいファイル|新しいディレクトリ|新しい)",
         RegexOptions.IgnoreCase | RegexOptions.Compiled);
 
     private static readonly Regex SkippedPattern = new(
-        @"(same|older|skip|同じ|スキップ)",
+        @"(same|older|skip|同じ|古い|スキップ)",
         RegexOptions.IgnoreCase | RegexOptions.Compiled);
 
     private static readonly Regex ExtraPattern = new(
