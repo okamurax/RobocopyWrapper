@@ -21,6 +21,7 @@ public partial class Form1 : Form
     // 出力バッファ (UIスレッドへの負荷軽減)
     private readonly record struct LogEntry(string Line, Color? OverrideColor, bool IsError);
     private readonly ConcurrentQueue<LogEntry> _progressQueue = new();
+    private readonly ConcurrentQueue<string> _copyResultQueue = new();
     private readonly ConcurrentQueue<string> _errorQueue = new();
     private System.Windows.Forms.Timer? _flushTimer;
     private int _errorCount;
@@ -190,7 +191,7 @@ public partial class Form1 : Form
 
         foreach (var (text, ci) in lines)
         {
-            sb.Append($@"\pard\sl-{LineSpacingTwips}\slmult0\cf{ci}\f0\fs{fs} ");
+            sb.Append($@"\pard\tqr\tx{TabStopSize}\tql\tx{TabStopPath}\sl-{LineSpacingTwips}\slmult0\cf{ci}\f0\fs{fs} ");
             AppendRtfEscaped(sb, text);
             sb.Append(@"\par");
         }
@@ -207,6 +208,7 @@ public partial class Form1 : Form
                 case '\\': sb.Append(@"\\"); break;
                 case '{': sb.Append(@"\{"); break;
                 case '}': sb.Append(@"\}"); break;
+                case '\t': sb.Append(@"\tab "); break;
                 default:
                     if (ch > 127)
                     {
@@ -618,20 +620,10 @@ public partial class Form1 : Form
         return rawSize;
     }
 
-    // モノスペースフォントでの表示幅（全角文字は2として計算）
-    private static int GetVisualWidth(string s)
-    {
-        int w = 0;
-        foreach (var c in s)
-            w += c >= 0x3000 ? 2 : 1;
-        return w;
-    }
-
-    private static string PadRightVisual(string s, int targetWidth)
-    {
-        int spaces = targetWidth - GetVisualWidth(s);
-        return spaces > 0 ? s + new string(' ', spaces) : s;
-    }
+    // RTFタブストップ位置 (twips: 1inch = 1440twips)
+    // Tab1: サイズ列の右端（右揃え）, Tab2: パス列の開始（左揃え）
+    private const int TabStopSize = 3600;
+    private const int TabStopPath = 4200;
 
     private static string FormatRobocopyLine(string line)
     {
@@ -642,8 +634,8 @@ public partial class Form1 : Form
             var size = FormatFileSize(match.Groups[2].Value);
             var path = match.Groups[3].Value.Trim();
 
-            // 全角文字対応パディング（最長の「新しいディレクトリ」= 18 視覚幅に合わせる）
-            return $"  {PadRightVisual(status, 18)} {size,10}  {path}";
+            // RTFタブストップで列位置を固定（全角文字幅の差異に依存しない）
+            return $"  {status}\t{size}\t{path}";
         }
 
         return line.Replace("\t", "  ");
@@ -704,11 +696,21 @@ public partial class Form1 : Form
             }
         }
 
+        if (!_copyResultQueue.IsEmpty)
+        {
+            var sb = new StringBuilder();
+            while (_copyResultQueue.TryDequeue(out var line))
+                sb.AppendLine(FormatRobocopyLine(line));
+
+            if (sb.Length > 0)
+                txtCopyResult.AppendText(sb.ToString());
+        }
+
         if (!_errorQueue.IsEmpty)
         {
             var sb = new StringBuilder();
             while (_errorQueue.TryDequeue(out var line))
-                sb.AppendLine(line);
+                sb.AppendLine(FormatRobocopyLine(line));
 
             if (sb.Length > 0)
                 txtErrorLog.AppendText(sb.ToString());
@@ -767,6 +769,7 @@ public partial class Form1 : Form
         SetFixedLineSpacing(rtbProgress);
         _progressLineCount = 0;
         _errorCount = 0;
+        txtCopyResult.Clear();
 
         var source = txtSource.Text.Trim().Trim('"');
         var dest = txtDest.Text.Trim().Trim('"');
@@ -804,11 +807,20 @@ public partial class Form1 : Form
                 _progressQueue.Enqueue(new LogEntry(args.Data, null, false));
                 // ファイル操作行はステータス部分だけで判定（ファイル名誤検知防止）
                 var fm = RobocopyFileLinePattern.Match(args.Data);
-                bool isError = fm.Success
-                    ? fm.Groups[1].Value.Equals("FAILED", StringComparison.OrdinalIgnoreCase) ||
-                      fm.Groups[1].Value.Equals("MISMATCH", StringComparison.OrdinalIgnoreCase)
-                    : ErrorLinePattern.IsMatch(args.Data);
-                if (isError)
+                if (fm.Success)
+                {
+                    var status = fm.Groups[1].Value;
+                    if (status.Equals("FAILED", StringComparison.OrdinalIgnoreCase) ||
+                        status.Equals("MISMATCH", StringComparison.OrdinalIgnoreCase))
+                    {
+                        Interlocked.Increment(ref _errorCount);
+                        _errorQueue.Enqueue(args.Data);
+                    }
+                    // コピー結果ログ（New File, New Dir, Newer 等）
+                    if (CopyingPattern.IsMatch(status))
+                        _copyResultQueue.Enqueue(args.Data);
+                }
+                else if (ErrorLinePattern.IsMatch(args.Data))
                 {
                     Interlocked.Increment(ref _errorCount);
                     _errorQueue.Enqueue(args.Data);
@@ -828,6 +840,10 @@ public partial class Form1 : Form
             _runningProcess.BeginErrorReadLine();
 
             await _runningProcess.WaitForExitAsync();
+            // 非同期出力コールバックの完了を保証（WaitForExitAsyncだけでは不十分）
+            _runningProcess.WaitForExit();
+            // 残バッファをすべてフラッシュしてから完了メッセージを表示
+            StopFlushTimer();
 
             var exitCode = _runningProcess.ExitCode;
 
@@ -850,6 +866,9 @@ public partial class Form1 : Form
             var finishLine = $"── {DateTime.Now:yyyy/MM/dd HH:mm:ss} {summary} ──";
             AppendProgressLineDirect(finishLine, exitCode < 8 ? ColorCopying : ColorError);
             ScrollProgressToBottom();
+            if (txtCopyResult.TextLength > 0)
+                txtCopyResult.AppendText(Environment.NewLine);
+            txtCopyResult.AppendText(finishLine + Environment.NewLine);
             txtErrorLog.AppendText(Environment.NewLine + finishLine + Environment.NewLine);
 
             // 正常終了（中止でない）場合のみ前回実行時刻を更新
@@ -974,20 +993,24 @@ public partial class Form1 : Form
     #endregion
 
     private void BtnClearLog_Click(object? sender, EventArgs e) => txtErrorLog.Clear();
+    private void BtnClearCopyResult_Click(object? sender, EventArgs e) => txtCopyResult.Clear();
 
-    // エラーログからパスを抽出するパターン (ドライブレター or UNCパス)
+    // ログからパスを抽出するパターン (ドライブレター or UNCパス)
     private static readonly Regex PathPattern = new(
         @"([A-Za-z]:\\[^\r\n*?""<>|]+|\\\\[^\r\n*?""<>|]+)",
         RegexOptions.Compiled);
 
-    private void TxtErrorLog_DoubleClick(object? sender, EventArgs e)
-    {
-        var charIndex = txtErrorLog.GetCharIndexFromPosition(
-            txtErrorLog.PointToClient(Cursor.Position));
-        var lineIndex = txtErrorLog.GetLineFromCharIndex(charIndex);
-        if (lineIndex < 0 || lineIndex >= txtErrorLog.Lines.Length) return;
+    private void TxtErrorLog_DoubleClick(object? sender, EventArgs e) => OpenPathFromLogLine(txtErrorLog);
+    private void TxtCopyResult_DoubleClick(object? sender, EventArgs e) => OpenPathFromLogLine(txtCopyResult);
 
-        var line = txtErrorLog.Lines[lineIndex];
+    private void OpenPathFromLogLine(TextBox textBox)
+    {
+        var charIndex = textBox.GetCharIndexFromPosition(
+            textBox.PointToClient(Cursor.Position));
+        var lineIndex = textBox.GetLineFromCharIndex(charIndex);
+        if (lineIndex < 0 || lineIndex >= textBox.Lines.Length) return;
+
+        var line = textBox.Lines[lineIndex];
         var match = PathPattern.Match(line);
         if (!match.Success) return;
 
