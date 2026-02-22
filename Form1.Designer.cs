@@ -38,8 +38,12 @@ partial class Form1
         trayMenuExit = new ToolStripMenuItem();
         notifyIcon = new NotifyIcon(components);
         splitContainer = new SplitContainer();
+        splitContainerInner = new SplitContainer();
         lblProgress = new Label();
         rtbProgress = new RichTextBox();
+        lblCopyResult = new Label();
+        btnClearCopyResult = new Button();
+        txtCopyResult = new TextBox();
         lblErrorLog = new Label();
         btnClearLog = new Button();
         txtErrorLog = new TextBox();
@@ -184,8 +188,46 @@ partial class Form1
         splitContainer.Panel1.Controls.Add(rtbProgress);
         splitContainer.Panel1.Controls.Add(lblProgress);
 
-        // --- Panel2: エラーログ ---
-        // ラベルとクリアボタンを同じ行に並べるヘッダーパネル
+        // --- Panel2: コピー結果 + エラーログ (ネストSplitContainer) ---
+        splitContainerInner.Dock = DockStyle.Fill;
+        splitContainerInner.Orientation = Orientation.Horizontal;
+        splitContainerInner.SplitterDistance = 80;
+        splitContainerInner.SplitterWidth = 6;
+
+        // -- コピー結果ログ (splitContainerInner.Panel1) --
+        var pnlCopyResultHeader = new Panel();
+        pnlCopyResultHeader.Dock = DockStyle.Top;
+        pnlCopyResultHeader.Height = 23;
+
+        lblCopyResult = new Label();
+        lblCopyResult.AutoSize = true;
+        lblCopyResult.Text = "コピー結果:";
+        lblCopyResult.Location = new Point(0, 4);
+
+        btnClearCopyResult = new Button();
+        btnClearCopyResult.Size = new Size(75, 23);
+        btnClearCopyResult.Text = "クリア";
+        btnClearCopyResult.Dock = DockStyle.Right;
+        btnClearCopyResult.Click += BtnClearCopyResult_Click;
+
+        pnlCopyResultHeader.Controls.Add(lblCopyResult);
+        pnlCopyResultHeader.Controls.Add(btnClearCopyResult);
+
+        txtCopyResult = new TextBox();
+        txtCopyResult.Multiline = true;
+        txtCopyResult.ReadOnly = true;
+        txtCopyResult.ScrollBars = ScrollBars.Both;
+        txtCopyResult.WordWrap = false;
+        txtCopyResult.BackColor = System.Drawing.Color.FromArgb(20, 30, 20);
+        txtCopyResult.ForeColor = System.Drawing.Color.FromArgb(80, 220, 120);
+        txtCopyResult.Font = GetMonoFont(9F);
+        txtCopyResult.Dock = DockStyle.Fill;
+        txtCopyResult.DoubleClick += TxtCopyResult_DoubleClick;
+
+        splitContainerInner.Panel1.Controls.Add(txtCopyResult);
+        splitContainerInner.Panel1.Controls.Add(pnlCopyResultHeader);
+
+        // -- エラーログ (splitContainerInner.Panel2) --
         var pnlErrorHeader = new Panel();
         pnlErrorHeader.Dock = DockStyle.Top;
         pnlErrorHeader.Height = 23;
@@ -215,8 +257,10 @@ partial class Form1
         txtErrorLog.Dock = DockStyle.Fill;
         txtErrorLog.DoubleClick += TxtErrorLog_DoubleClick;
 
-        splitContainer.Panel2.Controls.Add(txtErrorLog);
-        splitContainer.Panel2.Controls.Add(pnlErrorHeader);
+        splitContainerInner.Panel2.Controls.Add(txtErrorLog);
+        splitContainerInner.Panel2.Controls.Add(pnlErrorHeader);
+
+        splitContainer.Panel2.Controls.Add(splitContainerInner);
 
         // Form1
         AutoScaleDimensions = new SizeF(7F, 15F);
@@ -280,8 +324,12 @@ partial class Form1
     private ToolStripMenuItem trayMenuShow;
     private ToolStripMenuItem trayMenuExit;
     private SplitContainer splitContainer;
+    private SplitContainer splitContainerInner;
     private Label lblProgress;
     private RichTextBox rtbProgress;
+    private Label lblCopyResult;
+    private Button btnClearCopyResult;
+    private TextBox txtCopyResult;
     private Label lblErrorLog;
     private Button btnClearLog;
     private TextBox txtErrorLog;
