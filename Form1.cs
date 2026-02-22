@@ -1223,6 +1223,7 @@ public partial class Form1 : Form
         var innerHeight = splitContainerInner.Height;
         var innerPanel = (innerHeight - splitContainerInner.SplitterWidth) / 2;
         splitContainerInner.SplitterDistance = Math.Max(innerPanel, splitContainerInner.Panel1MinSize);
+        SaveSettings();
     }
 
     // ログからパスを抽出するパターン (ドライブレター or UNCパス)
@@ -1308,6 +1309,12 @@ public partial class Form1 : Form
                 _lastRunTime = s.LastRunTime.Value;
 
             _trayBalloonShown = s.TrayBalloonShown;
+
+            // スプリッター位置はLoad後にコントロールサイズが確定してから適用
+            if (s.SplitterDistance > 0)
+                this.Load += (_, _) => { try { splitContainer.SplitterDistance = s.SplitterDistance; } catch { } };
+            if (s.InnerSplitterDistance > 0)
+                this.Load += (_, _) => { try { splitContainerInner.SplitterDistance = s.InnerSplitterDistance; } catch { } };
         }
         catch
         {
@@ -1333,6 +1340,8 @@ public partial class Form1 : Form
                 ScheduleIntervalHours = (int)nudScheduleHours.Value,
                 LastRunTime = _lastRunTime == DateTime.MinValue ? null : _lastRunTime,
                 TrayBalloonShown = _trayBalloonShown,
+                SplitterDistance = splitContainer.SplitterDistance,
+                InnerSplitterDistance = splitContainerInner.SplitterDistance,
             };
             var json = JsonSerializer.Serialize(s, new JsonSerializerOptions { WriteIndented = true });
             File.WriteAllText(SettingsPath, json);
@@ -1415,6 +1424,8 @@ public partial class Form1 : Form
         public int ScheduleIntervalHours { get; set; } = 1;
         public DateTime? LastRunTime { get; set; }
         public bool TrayBalloonShown { get; set; }
+        public int SplitterDistance { get; set; }
+        public int InnerSplitterDistance { get; set; }
     }
 
     #endregion
