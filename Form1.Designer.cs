@@ -204,7 +204,7 @@ partial class Form1
         pnlCopyResultHeader.Height = 23;
 
         lblCopyResult.AutoSize = true;
-        lblCopyResult.Text = "コピー結果:";
+        lblCopyResult.Text = "操作結果:";
         lblCopyResult.Location = new Point(0, 4);
 
         btnClearCopyResult.Size = new Size(75, 23);

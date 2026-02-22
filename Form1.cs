@@ -286,6 +286,10 @@ public partial class Form1 : Form
             this.Text = "Robocopy Wrapper [スケジュール待機中]";
         }
 
+        // スプリッターダブルクリックで3パネル均等化
+        splitContainer.DoubleClick += SplitContainer_DoubleClick;
+        splitContainerInner.DoubleClick += SplitContainer_DoubleClick;
+
         FormClosing += Form1_FormClosing;
     }
 
@@ -816,8 +820,11 @@ public partial class Form1 : Form
                         Interlocked.Increment(ref _errorCount);
                         _errorQueue.Enqueue(args.Data);
                     }
-                    // コピー結果ログ（New File, New Dir, Newer 等）
-                    if (CopyingPattern.IsMatch(status))
+                    // 操作結果ログ（コピー・EXTRA等、スキップ以外の実操作行）
+                    if (!SkippedPattern.IsMatch(status) &&
+                        !status.Equals("FAILED", StringComparison.OrdinalIgnoreCase) &&
+                        !status.Equals("MISMATCH", StringComparison.OrdinalIgnoreCase) &&
+                        status.Length > 0)
                         _copyResultQueue.Enqueue(args.Data);
                 }
                 else if (ErrorLinePattern.IsMatch(args.Data))
@@ -994,6 +1001,24 @@ public partial class Form1 : Form
 
     private void BtnClearLog_Click(object? sender, EventArgs e) => txtErrorLog.Clear();
     private void BtnClearCopyResult_Click(object? sender, EventArgs e) => txtCopyResult.Clear();
+
+    /// <summary>
+    /// スプリッターをダブルクリックしたとき、3パネルの高さを均等にする
+    /// </summary>
+    private void SplitContainer_DoubleClick(object? sender, EventArgs e)
+    {
+        // 全体の高さからスプリッター幅2本分を引いて3等分
+        var totalHeight = splitContainer.Height;
+        var splitterWidths = splitContainer.SplitterWidth + splitContainerInner.SplitterWidth;
+        var panelHeight = (totalHeight - splitterWidths) / 3;
+
+        // 外側: Panel1 = 1/3, Panel2 = 2/3（内側のスプリッター幅含む）
+        splitContainer.SplitterDistance = Math.Max(panelHeight, splitContainer.Panel1MinSize);
+        // 内側: Panel1 = Panel2 = 均等
+        var innerHeight = splitContainerInner.Height;
+        var innerPanel = (innerHeight - splitContainerInner.SplitterWidth) / 2;
+        splitContainerInner.SplitterDistance = Math.Max(innerPanel, splitContainerInner.Panel1MinSize);
+    }
 
     // ログからパスを抽出するパターン (ドライブレター or UNCパス)
     private static readonly Regex PathPattern = new(
