@@ -40,7 +40,7 @@ partial class Form1
         splitContainer = new SplitContainer();
         splitContainerInner = new SplitContainer();
         lblProgress = new Label();
-        rtbProgress = new RichTextBox();
+        txtProgress = new TextBox();
         lblCopyResult = new Label();
         btnClearCopyResult = new Button();
         txtCopyResult = new TextBox();
@@ -196,15 +196,16 @@ partial class Form1
         lblProgress.Location = new Point(0, 0);
         lblProgress.Dock = DockStyle.Top;
 
-        rtbProgress.ReadOnly = true;
-        rtbProgress.WordWrap = false;
-        rtbProgress.BackColor = System.Drawing.Color.FromArgb(20, 20, 30);
-        rtbProgress.ForeColor = System.Drawing.Color.FromArgb(180, 180, 180);
-        rtbProgress.Font = GetMonoFont(9F);
-        rtbProgress.Dock = DockStyle.Fill;
-        rtbProgress.DetectUrls = false;
+        txtProgress.Multiline = true;
+        txtProgress.ReadOnly = true;
+        txtProgress.ScrollBars = ScrollBars.Both;
+        txtProgress.WordWrap = false;
+        txtProgress.BackColor = System.Drawing.Color.FromArgb(20, 20, 30);
+        txtProgress.ForeColor = System.Drawing.Color.FromArgb(180, 180, 180);
+        txtProgress.Font = GetMonoFont(9F);
+        txtProgress.Dock = DockStyle.Fill;
 
-        splitContainer.Panel1.Controls.Add(rtbProgress);
+        splitContainer.Panel1.Controls.Add(txtProgress);
         splitContainer.Panel1.Controls.Add(lblProgress);
 
         // --- Panel2: コピー結果 + エラーログ (ネストSplitContainer) ---
@@ -347,7 +348,7 @@ partial class Form1
     private SplitContainer splitContainer;
     private SplitContainer splitContainerInner;
     private Label lblProgress;
-    private RichTextBox rtbProgress;
+    private TextBox txtProgress;
     private Label lblCopyResult;
     private Button btnClearCopyResult;
     private TextBox txtCopyResult;

@@ -13,19 +13,19 @@ public partial class Form1 : Form
     private static readonly string SettingsPath = Path.Combine(
         AppContext.BaseDirectory, "settings.json");
 
-    private const int MaxProgressLines = 5000;
-
     private Process? _runningProcess;
     private bool _isPaused;
-    private int _progressLineCount;
 
     // 出力バッファ (UIスレッドへの負荷軽減)
-    private readonly record struct LogEntry(string Line, Color? OverrideColor, bool IsError);
-    private readonly ConcurrentQueue<LogEntry> _progressQueue = new();
+    private readonly ConcurrentQueue<string> _progressQueue = new();
     private readonly ConcurrentQueue<string> _copyResultQueue = new();
     private readonly ConcurrentQueue<string> _errorQueue = new();
     private System.Windows.Forms.Timer? _flushTimer;
     private int _errorCount;
+    private int _copyCount;
+    private int _skipCount;
+    private int _extraCount;
+    private int _lastReportedTotal;
 
     // タスクトレイ
     private bool _isExiting;
@@ -78,154 +78,7 @@ public partial class Form1 : Form
         @"\*EXTRA",
         RegexOptions.IgnoreCase | RegexOptions.Compiled);
 
-    private static readonly Regex SummaryPattern = new(
-        @"^\s*(Dirs|Files|Bytes|Times|Speed|ディレクトリ|ファイル|バイト|時刻|速度)\s*:",
-        RegexOptions.IgnoreCase | RegexOptions.Compiled);
-
-    private static readonly Regex SeparatorPattern = new(
-        @"^-{5,}$",
-        RegexOptions.Compiled);
-
-    // 色定義
-    private static readonly Color ColorDefault = Color.FromArgb(180, 180, 180);
-    private static readonly Color ColorCopying = Color.FromArgb(80, 220, 120);
-    private static readonly Color ColorSkipped = Color.FromArgb(100, 100, 100);
-    private static readonly Color ColorExtra = Color.FromArgb(220, 180, 50);
-    private static readonly Color ColorError = Color.FromArgb(255, 80, 80);
-    private static readonly Color ColorSummary = Color.FromArgb(100, 180, 255);
-    private static readonly Color ColorSeparator = Color.FromArgb(60, 60, 80);
-    private static readonly Color ColorInfo = Color.FromArgb(140, 140, 160);
-
-    // Win32 API
-    [DllImport("user32.dll")]
-    private static extern IntPtr SendMessage(IntPtr hWnd, int wMsg, IntPtr wParam, IntPtr lParam);
-
-    private const int WM_VSCROLL = 0x0115;
-    private static readonly IntPtr SB_BOTTOM = new(7);
-
-    // 行の高さを固定するためのPARAFORMAT2
-    private const int EM_SETPARAFORMAT = 0x0447;
-    private const uint PFM_LINESPACING = 0x00000100;
-    private const int LineSpacingTwips = 240; // 12pt (twips: 1pt=20)
-
-    [StructLayout(LayoutKind.Sequential)]
-    private struct PARAFORMAT2
-    {
-        public int cbSize;
-        public uint dwMask;
-        public short wNumbering;
-        public short wReserved;
-        public int dxStartIndent;
-        public int dxRightIndent;
-        public int dxOffset;
-        public short wAlignment;
-        public short cTabCount;
-        [MarshalAs(UnmanagedType.ByValArray, SizeConst = 32)]
-        public int[] rgxTabs;
-        public int dySpaceBefore;
-        public int dySpaceAfter;
-        public int dyLineSpacing;
-        public short sStyle;
-        public byte bLineSpacingRule;
-        public byte bOutlineLevel;
-        public short wShadingWeight;
-        public short wShadingStyle;
-        public short wNumberingStart;
-        public short wNumberingStyle;
-        public short wNumberingTab;
-        public short wBorderSpace;
-        public short wBorderWidth;
-        public short wBorders;
-    }
-
-    private void SetFixedLineSpacing(RichTextBox rtb)
-    {
-        rtb.SelectionStart = 0;
-        rtb.SelectionLength = 0;
-        var pf = new PARAFORMAT2
-        {
-            rgxTabs = new int[32],
-            dwMask = PFM_LINESPACING,
-            dyLineSpacing = LineSpacingTwips,
-            bLineSpacingRule = 4,
-        };
-        pf.cbSize = Marshal.SizeOf(pf);
-
-        var ptr = Marshal.AllocHGlobal(pf.cbSize);
-        try
-        {
-            Marshal.StructureToPtr(pf, ptr, false);
-            SendMessage(rtb.Handle, EM_SETPARAFORMAT, IntPtr.Zero, ptr);
-        }
-        finally
-        {
-            Marshal.FreeHGlobal(ptr);
-        }
-    }
-
-    // RTFバッチ挿入: 複数行を1回のSelectedRtfで一括追加
-    private string BuildRtfBatch(List<LogEntry> entries)
-    {
-        var colors = new List<Color>();
-        var colorMap = new Dictionary<int, int>();
-        var lines = new List<(string text, int ci)>();
-
-        foreach (var e in entries)
-        {
-            var fmt = FormatRobocopyLine(e.Line);
-            var col = e.OverrideColor ?? ClassifyLine(e.Line);
-            var argb = col.ToArgb();
-            if (!colorMap.TryGetValue(argb, out var ci))
-            {
-                ci = colors.Count + 1;
-                colors.Add(col);
-                colorMap[argb] = ci;
-            }
-            lines.Add((fmt, ci));
-        }
-
-        var fontName = rtbProgress.Font.Name;
-        var fs = (int)(rtbProgress.Font.SizeInPoints * 2);
-
-        var sb = new StringBuilder(entries.Count * 120);
-        sb.Append(@"{\rtf1\ansi\deff0{\fonttbl{\f0 ").Append(fontName).Append(@";}}{\colortbl ;");
-        foreach (var c in colors)
-            sb.Append($@"\red{c.R}\green{c.G}\blue{c.B};");
-        sb.Append('}');
-
-        foreach (var (text, ci) in lines)
-        {
-            sb.Append($@"\pard\tqr\tx{TabStopSize}\tql\tx{TabStopPath}\sl-{LineSpacingTwips}\slmult0\cf{ci}\f0\fs{fs} ");
-            AppendRtfEscaped(sb, text);
-            sb.Append(@"\par");
-        }
-        sb.Append('}');
-        return sb.ToString();
-    }
-
-    private static void AppendRtfEscaped(StringBuilder sb, string text)
-    {
-        foreach (var ch in text)
-        {
-            switch (ch)
-            {
-                case '\\': sb.Append(@"\\"); break;
-                case '{': sb.Append(@"\{"); break;
-                case '}': sb.Append(@"\}"); break;
-                case '\t': sb.Append(@"\tab "); break;
-                default:
-                    if (ch > 127)
-                    {
-                        int code = ch;
-                        if (code > 32767) code -= 65536;
-                        sb.Append(@"\u").Append(code).Append('?');
-                    }
-                    else
-                        sb.Append(ch);
-                    break;
-            }
-        }
-    }
+    // NtSuspend/Resume用 (プロセス一時停止)
 
     [DllImport("ntdll.dll", SetLastError = true)]
     private static extern int NtSuspendProcess(IntPtr processHandle);
@@ -360,9 +213,8 @@ public partial class Form1 : Form
             {
                 // 手動実行中/検証中 → スキップ（次回は上記で計算済みの時刻）
                 var reason = _isVerifying ? "検証中" : "実行中";
-                AppendProgressLineDirect(
-                    $"[{DateTime.Now:HH:mm:ss}] スケジュール実行をスキップ ({reason})", ColorInfo);
-                ScrollProgressToBottom();
+                AppendProgressLine(
+                    $"[{DateTime.Now:HH:mm:ss}] スケジュール実行をスキップ ({reason})");
                 return;
             }
 
@@ -371,9 +223,8 @@ public partial class Form1 : Form
 
             if (string.IsNullOrEmpty(source) || string.IsNullOrEmpty(dest))
             {
-                AppendProgressLineDirect(
-                    $"[{DateTime.Now:HH:mm:ss}] スケジュール実行をスキップ (コピー元/先が未設定)", ColorInfo);
-                ScrollProgressToBottom();
+                AppendProgressLine(
+                    $"[{DateTime.Now:HH:mm:ss}] スケジュール実行をスキップ (コピー元/先が未設定)");
                 return;
             }
 
@@ -388,9 +239,8 @@ public partial class Form1 : Form
         {
             // フォームが破棄済みの場合はコントロール操作を試みない
             if (IsDisposed) return;
-            AppendProgressLineDirect(
-                $"[{DateTime.Now:HH:mm:ss}] スケジューラーエラー: {ex.Message}", ColorError);
-            ScrollProgressToBottom();
+            AppendProgressLine(
+                $"[{DateTime.Now:HH:mm:ss}] スケジューラーエラー: {ex.Message}");
         }
     }
 
@@ -553,44 +403,7 @@ public partial class Form1 : Form
 
     #endregion
 
-    #region Progress log (RichTextBox with color + formatting)
-
-    private Color ClassifyLine(string line)
-    {
-        if (string.IsNullOrWhiteSpace(line))
-            return ColorDefault;
-
-        // ファイル操作行はステータス部分だけで色を決める（ファイル名中のエラーキーワード誤検知防止）
-        var fm = RobocopyFileLinePattern.Match(line);
-        if (fm.Success)
-        {
-            var status = fm.Groups[1].Value;
-            if (status.Equals("FAILED", StringComparison.OrdinalIgnoreCase) ||
-                status.Equals("MISMATCH", StringComparison.OrdinalIgnoreCase))
-                return ColorError;
-            if (ExtraPattern.IsMatch(status))
-                return ColorExtra;
-            if (CopyingPattern.IsMatch(status))
-                return ColorCopying;
-            if (SkippedPattern.IsMatch(status))
-                return ColorSkipped;
-            return ColorDefault;
-        }
-
-        if (ErrorLinePattern.IsMatch(line))
-            return ColorError;
-        if (ExtraPattern.IsMatch(line))
-            return ColorExtra;
-        if (CopyingPattern.IsMatch(line))
-            return ColorCopying;
-        if (SkippedPattern.IsMatch(line))
-            return ColorSkipped;
-        if (SummaryPattern.IsMatch(line))
-            return ColorSummary;
-        if (SeparatorPattern.IsMatch(line))
-            return ColorSeparator;
-        return ColorDefault;
-    }
+    #region Progress log & output buffering
 
     private static string FormatFileSize(string rawSize)
     {
@@ -629,12 +442,10 @@ public partial class Form1 : Form
         return rawSize;
     }
 
-    // RTFタブストップ位置 (twips: 1inch = 1440twips)
-    // Tab1: サイズ列の右端（右揃え）, Tab2: パス列の開始（左揃え）
-    private const int TabStopSize = 3600;
-    private const int TabStopPath = 4200;
-
-    private static string FormatRobocopyLine(string line)
+    /// <summary>
+    /// robocopyのファイル操作行をフォーマット（操作結果・エラーログ用）
+    /// </summary>
+    private static string FormatRobocopyLine(string line, string? basePath = null)
     {
         var match = RobocopyFileLinePattern.Match(line);
         if (match.Success)
@@ -642,45 +453,17 @@ public partial class Form1 : Form
             var status = match.Groups[1].Value.Trim();
             var size = FormatFileSize(match.Groups[2].Value);
             var path = match.Groups[3].Value.Trim();
-
-            // RTFタブストップで列位置を固定（全角文字幅の差異に依存しない）
+            if (basePath != null)
+                path = Path.Combine(basePath, path);
             return $"  {status}\t{size}\t{path}";
         }
 
         return line.Replace("\t", "  ");
     }
 
-    private void AppendProgressLineDirect(string line, Color? overrideColor = null)
+    private void AppendProgressLine(string line)
     {
-        var formatted = FormatRobocopyLine(line);
-        var color = overrideColor ?? ClassifyLine(line);
-
-        rtbProgress.SelectionStart = rtbProgress.TextLength;
-        rtbProgress.SelectionLength = 0;
-        rtbProgress.SelectionColor = color;
-        rtbProgress.SelectionFont = rtbProgress.Font;
-        rtbProgress.AppendText(formatted + Environment.NewLine);
-    }
-
-    private void ScrollProgressToBottom()
-    {
-        SendMessage(rtbProgress.Handle, WM_VSCROLL, SB_BOTTOM, IntPtr.Zero);
-    }
-
-    private void TrimProgressIfNeeded()
-    {
-        if (_progressLineCount > MaxProgressLines)
-        {
-            var cutIndex = rtbProgress.GetFirstCharIndexFromLine(MaxProgressLines / 4);
-            if (cutIndex > 0)
-            {
-                rtbProgress.Select(0, cutIndex);
-                rtbProgress.ReadOnly = false;
-                rtbProgress.SelectedText = "";
-                rtbProgress.ReadOnly = true;
-                _progressLineCount -= MaxProgressLines / 4;
-            }
-        }
+        txtProgress.AppendText(line + Environment.NewLine);
     }
 
     private void FlushTimer_Tick(object? sender, EventArgs e) => FlushBuffers();
@@ -689,27 +472,19 @@ public partial class Form1 : Form
     {
         if (!_progressQueue.IsEmpty)
         {
-            var entries = new List<LogEntry>();
-            while (_progressQueue.TryDequeue(out var entry))
-                entries.Add(entry);
+            var sb = new StringBuilder();
+            while (_progressQueue.TryDequeue(out var line))
+                sb.AppendLine(line);
 
-            if (entries.Count > 0)
-            {
-                var rtf = BuildRtfBatch(entries);
-                rtbProgress.SelectionStart = rtbProgress.TextLength;
-                rtbProgress.SelectionLength = 0;
-                rtbProgress.SelectedRtf = rtf;
-                _progressLineCount += entries.Count;
-                TrimProgressIfNeeded();
-                ScrollProgressToBottom();
-            }
+            if (sb.Length > 0)
+                txtProgress.AppendText(sb.ToString());
         }
 
         if (!_copyResultQueue.IsEmpty)
         {
             var sb = new StringBuilder();
             while (_copyResultQueue.TryDequeue(out var line))
-                sb.AppendLine(FormatRobocopyLine(line));
+                sb.AppendLine(line);
 
             if (sb.Length > 0)
                 txtCopyResult.AppendText(sb.ToString());
@@ -719,7 +494,7 @@ public partial class Form1 : Form
         {
             var sb = new StringBuilder();
             while (_errorQueue.TryDequeue(out var line))
-                sb.AppendLine(FormatRobocopyLine(line));
+                sb.AppendLine(line);
 
             if (sb.Length > 0)
                 txtErrorLog.AppendText(sb.ToString());
@@ -774,10 +549,12 @@ public partial class Form1 : Form
     {
         _wasKilled = false;
         SetRunningState(true);
-        rtbProgress.Clear();
-        SetFixedLineSpacing(rtbProgress);
-        _progressLineCount = 0;
+        txtProgress.Clear();
         _errorCount = 0;
+        _copyCount = 0;
+        _skipCount = 0;
+        _extraCount = 0;
+        _lastReportedTotal = 0;
         txtCopyResult.Clear();
 
         var source = txtSource.Text.Trim().Trim('"');
@@ -788,9 +565,8 @@ public partial class Form1 : Form
         if (!string.IsNullOrEmpty(options))
             arguments += " " + options;
 
-        AppendProgressLineDirect($"[{DateTime.Now:HH:mm:ss}] robocopy {arguments}", ColorInfo);
-        AppendProgressLineDirect(new string('─', 70), ColorSeparator);
-        ScrollProgressToBottom();
+        AppendProgressLine($"[{DateTime.Now:HH:mm:ss}] robocopy {arguments}");
+        AppendProgressLine(new string('─', 70));
 
         StartFlushTimer();
 
@@ -813,7 +589,6 @@ public partial class Form1 : Form
             _runningProcess.OutputDataReceived += (s, args) =>
             {
                 if (args.Data == null) return;
-                _progressQueue.Enqueue(new LogEntry(args.Data, null, false));
                 // ファイル操作行はステータス部分だけで判定（ファイル名誤検知防止）
                 var fm = RobocopyFileLinePattern.Match(args.Data);
                 if (fm.Success)
@@ -823,14 +598,31 @@ public partial class Form1 : Form
                         status.Equals("MISMATCH", StringComparison.OrdinalIgnoreCase))
                     {
                         Interlocked.Increment(ref _errorCount);
-                        _errorQueue.Enqueue(args.Data);
+                        _errorQueue.Enqueue(FormatRobocopyLine(args.Data));
                     }
-                    // 操作結果ログ（コピー・EXTRA等、スキップ以外の実操作行）
+                    // 操作結果ログ（コピー・EXTRA等、スキップ以外の実操作行）フルパス付き
                     if (!SkippedPattern.IsMatch(status) &&
                         !status.Equals("FAILED", StringComparison.OrdinalIgnoreCase) &&
                         !status.Equals("MISMATCH", StringComparison.OrdinalIgnoreCase) &&
                         status.Length > 0)
-                        _copyResultQueue.Enqueue(args.Data);
+                        _copyResultQueue.Enqueue(FormatRobocopyLine(args.Data, dest));
+
+                    // カテゴリ別カウント
+                    if (CopyingPattern.IsMatch(status))
+                        Interlocked.Increment(ref _copyCount);
+                    else if (SkippedPattern.IsMatch(status))
+                        Interlocked.Increment(ref _skipCount);
+                    else if (ExtraPattern.IsMatch(status))
+                        Interlocked.Increment(ref _extraCount);
+
+                    // 100ファイルごとに進捗サマリーを表示
+                    var total = _copyCount + _skipCount + _extraCount + _errorCount;
+                    if (total >= _lastReportedTotal + 100)
+                    {
+                        _lastReportedTotal = total;
+                        _progressQueue.Enqueue(
+                            $"[{DateTime.Now:HH:mm:ss}] 処理中... コピー: {_copyCount:#,0}, スキップ: {_skipCount:#,0}, EXTRA: {_extraCount:#,0}, エラー: {_errorCount:#,0}");
+                    }
                 }
                 else if (ErrorLinePattern.IsMatch(args.Data))
                 {
@@ -843,7 +635,7 @@ public partial class Form1 : Form
             {
                 if (args.Data == null) return;
                 Interlocked.Increment(ref _errorCount);
-                _progressQueue.Enqueue(new LogEntry("[STDERR] " + args.Data, ColorError, true));
+                _progressQueue.Enqueue($"[STDERR] {args.Data}");
                 _errorQueue.Enqueue("[STDERR] " + args.Data);
             };
 
@@ -867,17 +659,20 @@ public partial class Form1 : Form
                     >= 8 => $"[コピー失敗] 終了コード: {exitCode} - 一部のファイルのコピーに失敗しました。",
                     _ => $"[エラー] 終了コード: {exitCode}"
                 };
-                AppendProgressLineDirect(exitMsg, ColorError);
+                AppendProgressLine(exitMsg);
                 txtErrorLog.AppendText(Environment.NewLine + exitMsg + Environment.NewLine);
             }
+
+            // 最終カウントサマリー
+            AppendProgressLine(
+                $"[{DateTime.Now:HH:mm:ss}] コピー: {_copyCount:#,0}, スキップ: {_skipCount:#,0}, EXTRA: {_extraCount:#,0}, エラー: {_errorCount:#,0}");
 
             var summary = exitCode < 8
                 ? $"完了 (終了コード: {exitCode}, エラー: {_errorCount}件)"
                 : $"完了 (終了コード: {exitCode}, エラー: {_errorCount}件) ※エラーあり";
 
             var finishLine = $"── {DateTime.Now:yyyy/MM/dd HH:mm:ss} {summary} ──";
-            AppendProgressLineDirect(finishLine, exitCode < 8 ? ColorCopying : ColorError);
-            ScrollProgressToBottom();
+            AppendProgressLine(finishLine);
             if (txtCopyResult.TextLength > 0)
                 txtCopyResult.AppendText(Environment.NewLine);
             txtCopyResult.AppendText(finishLine + Environment.NewLine);
@@ -903,8 +698,7 @@ public partial class Form1 : Form
         catch (Exception ex)
         {
             var msg = $"[例外] {ex.Message}";
-            AppendProgressLineDirect(msg, ColorError);
-            ScrollProgressToBottom();
+            AppendProgressLine(msg);
             txtErrorLog.AppendText(msg + Environment.NewLine);
         }
         finally
@@ -933,14 +727,14 @@ public partial class Form1 : Form
                 NtResumeProcess(_runningProcess.Handle);
                 _isPaused = false;
                 btnPause.Text = "一時停止";
-                _progressQueue.Enqueue(new LogEntry($"[{DateTime.Now:HH:mm:ss}] 再開しました", ColorInfo, false));
+                _progressQueue.Enqueue($"[{DateTime.Now:HH:mm:ss}] 再開しました");
             }
             else
             {
                 NtSuspendProcess(_runningProcess.Handle);
                 _isPaused = true;
                 btnPause.Text = "再開";
-                _progressQueue.Enqueue(new LogEntry($"[{DateTime.Now:HH:mm:ss}] 一時停止しました", ColorInfo, false));
+                _progressQueue.Enqueue($"[{DateTime.Now:HH:mm:ss}] 一時停止しました");
             }
         }
         catch (Exception ex)
@@ -966,7 +760,7 @@ public partial class Form1 : Form
             }
             _wasKilled = true;
             _runningProcess.Kill(entireProcessTree: true);
-            _progressQueue.Enqueue(new LogEntry($"[{DateTime.Now:HH:mm:ss}] 中止しました", ColorError, false));
+            _progressQueue.Enqueue($"[{DateTime.Now:HH:mm:ss}] 中止しました");
             _errorQueue.Enqueue($"[{DateTime.Now:HH:mm:ss}] 中止しました");
         }
         catch (Exception ex)
@@ -1035,9 +829,7 @@ public partial class Form1 : Form
         this.Text = "Robocopy Wrapper [検証中]";
         notifyIcon.Text = "Robocopy Wrapper - 検証中...";
 
-        rtbProgress.Clear();
-        SetFixedLineSpacing(rtbProgress);
-        _progressLineCount = 0;
+        txtProgress.Clear();
         txtCopyResult.Clear();
 
         StartFlushTimer();
@@ -1049,13 +841,11 @@ public partial class Form1 : Form
         }
         catch (OperationCanceledException)
         {
-            _progressQueue.Enqueue(new LogEntry(
-                $"[{DateTime.Now:HH:mm:ss}] 検証を中止しました", ColorError, false));
+            _progressQueue.Enqueue($"[{DateTime.Now:HH:mm:ss}] 検証を中止しました");
         }
         catch (Exception ex)
         {
-            _progressQueue.Enqueue(new LogEntry(
-                $"[{DateTime.Now:HH:mm:ss}] 検証エラー: {ex.Message}", ColorError, false));
+            _progressQueue.Enqueue($"[{DateTime.Now:HH:mm:ss}] 検証エラー: {ex.Message}");
         }
         finally
         {
@@ -1077,9 +867,8 @@ public partial class Form1 : Form
 
     private async Task VerifyChecksumsAsync(string source, string dest, CancellationToken ct)
     {
-        _progressQueue.Enqueue(new LogEntry(
-            $"[{DateTime.Now:HH:mm:ss}] チェックサム検証開始: {source} ↔ {dest}", ColorInfo, false));
-        _progressQueue.Enqueue(new LogEntry(new string('─', 70), ColorSeparator, false));
+        _progressQueue.Enqueue($"[{DateTime.Now:HH:mm:ss}] チェックサム検証開始: {source} ↔ {dest}");
+        _progressQueue.Enqueue(new string('─', 70));
 
         var sw = Stopwatch.StartNew();
         var mismatchCount = 0;
@@ -1089,8 +878,7 @@ public partial class Form1 : Form
         var errorCount = 0;
 
         // ソース側のファイル列挙
-        _progressQueue.Enqueue(new LogEntry(
-            $"[{DateTime.Now:HH:mm:ss}] ファイルを列挙中...", ColorInfo, false));
+        _progressQueue.Enqueue($"[{DateTime.Now:HH:mm:ss}] ファイルを列挙中...");
 
         var sourceFiles = await Task.Run(() =>
         {
@@ -1100,8 +888,7 @@ public partial class Form1 : Form
                 .ToList();
         }, ct);
 
-        _progressQueue.Enqueue(new LogEntry(
-            $"[{DateTime.Now:HH:mm:ss}] ソース: {sourceFiles.Count:#,0} ファイル", ColorInfo, false));
+        _progressQueue.Enqueue($"[{DateTime.Now:HH:mm:ss}] ソース: {sourceFiles.Count:#,0} ファイル");
 
         // バックグラウンドでハッシュ比較
         var total = sourceFiles.Count;
@@ -1119,9 +906,8 @@ public partial class Form1 : Form
                 processed++;
                 if (processed % 100 == 0 || processed == total)
                 {
-                    _progressQueue.Enqueue(new LogEntry(
-                        $"[{DateTime.Now:HH:mm:ss}] 検証中... {processed:#,0}/{total:#,0} ({100.0 * processed / total:F1}%)",
-                        ColorInfo, false));
+                    _progressQueue.Enqueue(
+                        $"[{DateTime.Now:HH:mm:ss}] 検証中... {processed:#,0}/{total:#,0} ({100.0 * processed / total:F1}%)");
                 }
 
                 if (!File.Exists(dstPath))
@@ -1157,8 +943,7 @@ public partial class Form1 : Form
         }, ct);
 
         // デスト側にしかないファイルを検出
-        _progressQueue.Enqueue(new LogEntry(
-            $"[{DateTime.Now:HH:mm:ss}] デスト側の余剰ファイルを確認中...", ColorInfo, false));
+        _progressQueue.Enqueue($"[{DateTime.Now:HH:mm:ss}] デスト側の余剰ファイルを確認中...");
 
         if (Directory.Exists(dest))
         {
@@ -1187,10 +972,7 @@ public partial class Form1 : Form
             $"エラー: {errorCount:#,0}, " +
             $"所要時間: {elapsed.Hours:D2}:{elapsed.Minutes:D2}:{elapsed.Seconds:D2}) ──";
 
-        var summaryColor = (mismatchCount + missingInDestCount + missingInSourceCount + errorCount) == 0
-            ? ColorCopying : ColorError;
-
-        _progressQueue.Enqueue(new LogEntry(summary, summaryColor, false));
+        _progressQueue.Enqueue(summary);
 
         if (mismatchCount + missingInDestCount + missingInSourceCount + errorCount == 0)
             _copyResultQueue.Enqueue("すべてのファイルが一致しました。");
