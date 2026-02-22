@@ -700,7 +700,7 @@ public partial class Form1 : Form
         {
             var sb = new StringBuilder();
             while (_copyResultQueue.TryDequeue(out var line))
-                sb.AppendLine(line);
+                sb.AppendLine(FormatRobocopyLine(line));
 
             if (sb.Length > 0)
                 txtCopyResult.AppendText(sb.ToString());
@@ -710,7 +710,7 @@ public partial class Form1 : Form
         {
             var sb = new StringBuilder();
             while (_errorQueue.TryDequeue(out var line))
-                sb.AppendLine(line);
+                sb.AppendLine(FormatRobocopyLine(line));
 
             if (sb.Length > 0)
                 txtErrorLog.AppendText(sb.ToString());
@@ -818,11 +818,7 @@ public partial class Form1 : Form
                     }
                     // コピー結果ログ（New File, New Dir, Newer 等）
                     if (CopyingPattern.IsMatch(status))
-                    {
-                        var size = FormatFileSize(fm.Groups[2].Value);
-                        var path = fm.Groups[3].Value.Trim();
-                        _copyResultQueue.Enqueue($"{status.Trim()}  {size}  {path}");
-                    }
+                        _copyResultQueue.Enqueue(args.Data);
                 }
                 else if (ErrorLinePattern.IsMatch(args.Data))
                 {
@@ -844,6 +840,10 @@ public partial class Form1 : Form
             _runningProcess.BeginErrorReadLine();
 
             await _runningProcess.WaitForExitAsync();
+            // 非同期出力コールバックの完了を保証（WaitForExitAsyncだけでは不十分）
+            _runningProcess.WaitForExit();
+            // 残バッファをすべてフラッシュしてから完了メッセージを表示
+            StopFlushTimer();
 
             var exitCode = _runningProcess.ExitCode;
 
