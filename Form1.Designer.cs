@@ -47,6 +47,7 @@ partial class Form1
         lblErrorLog = new Label();
         btnClearLog = new Button();
         txtErrorLog = new TextBox();
+        chkStartup = new CheckBox();
         btnVerify = new Button();
         btnVerifyStop = new Button();
         ((System.ComponentModel.ISupportInitialize)nudScheduleHours).BeginInit();
@@ -145,11 +146,17 @@ partial class Form1
         lblScheduleUnit.Location = new Point(365, 111);
         lblScheduleUnit.Text = "時間ごと";
 
+        // chkStartup
+        chkStartup.AutoSize = true;
+        chkStartup.Location = new Point(420, 111);
+        chkStartup.Text = "スタートアップに登録";
+        chkStartup.CheckedChanged += ChkStartup_CheckedChanged;
+
         // lblNextRun
         lblNextRun.Anchor = AnchorStyles.Top | AnchorStyles.Right;
         lblNextRun.TextAlign = ContentAlignment.MiddleRight;
-        lblNextRun.Location = new Point(445, 111);
-        lblNextRun.Size = new Size(235, 16);
+        lblNextRun.Location = new Point(565, 111);
+        lblNextRun.Size = new Size(115, 16);
         lblNextRun.Text = "";
 
         // trayContextMenu
@@ -296,6 +303,7 @@ partial class Form1
         Controls.Add(chkSchedule);
         Controls.Add(nudScheduleHours);
         Controls.Add(lblScheduleUnit);
+        Controls.Add(chkStartup);
         Controls.Add(lblNextRun);
         Controls.Add(btnVerify);
         Controls.Add(btnVerifyStop);
@@ -355,6 +363,7 @@ partial class Form1
     private Label lblErrorLog;
     private Button btnClearLog;
     private TextBox txtErrorLog;
+    private CheckBox chkStartup;
     private Button btnVerify;
     private Button btnVerifyStop;
 }

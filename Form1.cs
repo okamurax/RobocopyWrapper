@@ -5,6 +5,7 @@ using System.Security.Cryptography;
 using System.Text;
 using System.Text.Json;
 using System.Text.RegularExpressions;
+using Microsoft.Win32;
 
 namespace RobocopyWrapper;
 
@@ -92,6 +93,9 @@ public partial class Form1 : Form
         LoadSettings();
         // LoadSettings後の実際の値で初期化（Enter未経由のLeaveで誤リセットしないため）
         _nudValueOnEnter = nudScheduleHours.Value;
+
+        // スタートアップ登録状態をレジストリから復元
+        chkStartup.Checked = IsStartupRegistered();
 
         // パス変更時は即時保存（トレイ格納中の強制終了でも設定を保持）
         txtSource.Leave += (_, _) => SaveSettings();
@@ -1190,6 +1194,44 @@ public partial class Form1 : Form
         StopSchedulerTimer();
         StopFlushTimer();
         SaveSettings();
+    }
+
+    private const string StartupRegistryKey = @"SOFTWARE\Microsoft\Windows\CurrentVersion\Run";
+    private const string StartupValueName = "RobocopyWrapper";
+
+    private void ChkStartup_CheckedChanged(object? sender, EventArgs e)
+    {
+        try
+        {
+            using var key = Registry.CurrentUser.OpenSubKey(StartupRegistryKey, writable: true);
+            if (key == null) return;
+
+            if (chkStartup.Checked)
+            {
+                var exePath = $"\"{Application.ExecutablePath}\"";
+                key.SetValue(StartupValueName, exePath);
+            }
+            else
+            {
+                key.DeleteValue(StartupValueName, throwOnMissingValue: false);
+            }
+        }
+        catch
+        {
+        }
+    }
+
+    private static bool IsStartupRegistered()
+    {
+        try
+        {
+            using var key = Registry.CurrentUser.OpenSubKey(StartupRegistryKey);
+            return key?.GetValue(StartupValueName) != null;
+        }
+        catch
+        {
+            return false;
+        }
     }
 
     private class AppSettings
