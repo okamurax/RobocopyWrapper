@@ -17,7 +17,7 @@ public partial class Form1 : Form
     private bool _isExiting;
     private bool _trayBalloonShown;
     private System.Windows.Forms.Timer? _schedulerTimer;
-    private int _rightClickedTabIndex = -1;
+    private TabPage? _rightClickedTab;
 
     public Form1()
     {
@@ -136,8 +136,10 @@ public partial class Form1 : Form
             panel.ForceStop();
         }
 
+        var tabPage = tabControl.TabPages[index];
         tabControl.TabPages.RemoveAt(index);
         panel?.Dispose();
+        tabPage.Dispose();
         UpdateRemoveButtonState();
         SaveSettings();
     }
@@ -149,7 +151,7 @@ public partial class Form1 : Form
         {
             if (tabControl.GetTabRect(i).Contains(e.Location))
             {
-                _rightClickedTabIndex = i;
+                _rightClickedTab = tabControl.TabPages[i];
                 tabContextMenu.Show(tabControl, e.Location);
                 break;
             }
@@ -158,9 +160,9 @@ public partial class Form1 : Form
 
     private void TabMenuRename_Click(object? sender, EventArgs e)
     {
-        if (_rightClickedTabIndex < 0 || _rightClickedTabIndex >= tabControl.TabCount) return;
+        if (_rightClickedTab == null || !tabControl.TabPages.Contains(_rightClickedTab)) return;
 
-        var panel = GetPanel(_rightClickedTabIndex);
+        var panel = _rightClickedTab.Tag as BackupJobPanel;
         if (panel == null) return;
 
         var currentName = panel.JobName;
@@ -169,14 +171,15 @@ public partial class Form1 : Form
         {
             var newName = input.Trim();
             panel.JobName = newName;
-            tabControl.TabPages[_rightClickedTabIndex].Text = newName;
+            _rightClickedTab.Text = newName;
             SaveSettings();
         }
     }
 
     private void TabMenuDelete_Click(object? sender, EventArgs e)
     {
-        RemoveTab(_rightClickedTabIndex);
+        if (_rightClickedTab == null || !tabControl.TabPages.Contains(_rightClickedTab)) return;
+        RemoveTab(tabControl.TabPages.IndexOf(_rightClickedTab));
     }
 
     private void UpdateRemoveButtonState()
@@ -211,7 +214,7 @@ public partial class Form1 : Form
 
     private static string? ShowInputDialog(string title, string prompt, string defaultValue)
     {
-        var form = new Form
+        using var form = new Form
         {
             Text = title,
             Size = new Size(350, 150),
@@ -330,9 +333,12 @@ public partial class Form1 : Form
         }
     }
 
+    private bool _schedulerRunning;
+
     private async void SchedulerTimer_Tick(object? sender, EventArgs e)
     {
-        if (IsDisposed) return;
+        if (IsDisposed || _schedulerRunning) return;
+        _schedulerRunning = true;
         try
         {
             var panels = GetAllPanels().ToList();
@@ -375,6 +381,10 @@ public partial class Form1 : Form
             var activePanel = GetPanel(tabControl.SelectedIndex);
             activePanel?.AppendProgressLine(
                 $"[{DateTime.Now:HH:mm:ss}] スケジューラーエラー: {ex.Message}");
+        }
+        finally
+        {
+            _schedulerRunning = false;
         }
     }
 

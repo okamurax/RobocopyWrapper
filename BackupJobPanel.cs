@@ -142,6 +142,7 @@ public partial class BackupJobPanel : UserControl
 
         txtSource.Leave += (_, _) => SettingsChanged?.Invoke(this, EventArgs.Empty);
         txtDest.Leave += (_, _) => SettingsChanged?.Invoke(this, EventArgs.Empty);
+        txtOptions.Leave += (_, _) => SettingsChanged?.Invoke(this, EventArgs.Empty);
 
         chkSchedule.CheckedChanged += ChkSchedule_CheckedChanged;
         nudScheduleHours.ValueChanged += NudScheduleHours_ValueChanged;
@@ -790,13 +791,21 @@ public partial class BackupJobPanel : UserControl
     private void TxtSource_DragDrop(object? sender, DragEventArgs e)
     {
         var path = GetDroppedPath(e);
-        if (path != null) txtSource.Text = path;
+        if (path != null)
+        {
+            txtSource.Text = path;
+            SettingsChanged?.Invoke(this, EventArgs.Empty);
+        }
     }
 
     private void TxtDest_DragDrop(object? sender, DragEventArgs e)
     {
         var path = GetDroppedPath(e);
-        if (path != null) txtDest.Text = path;
+        if (path != null)
+        {
+            txtDest.Text = path;
+            SettingsChanged?.Invoke(this, EventArgs.Empty);
+        }
     }
 
     private static string? GetDroppedPath(DragEventArgs e)
