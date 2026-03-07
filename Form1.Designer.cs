@@ -1,3 +1,8 @@
+using System;
+using System.Drawing;
+using System.Linq;
+using System.Windows.Forms;
+
 namespace RobocopyWrapper;
 
 partial class Form1
@@ -155,8 +160,8 @@ partial class Form1
         // lblNextRun
         lblNextRun.Anchor = AnchorStyles.Top | AnchorStyles.Right;
         lblNextRun.TextAlign = ContentAlignment.MiddleRight;
-        lblNextRun.Location = new Point(565, 111);
-        lblNextRun.Size = new Size(115, 16);
+        lblNextRun.Location = new Point(380, 111);
+        lblNextRun.Size = new Size(300, 16);
         lblNextRun.Text = "";
 
         // trayContextMenu

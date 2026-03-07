@@ -1,3 +1,6 @@
+using System;
+using System.Windows.Forms;
+
 namespace RobocopyWrapper;
 
 static class Program
@@ -9,7 +12,8 @@ static class Program
     static void Main()
     {
         System.Text.Encoding.RegisterProvider(System.Text.CodePagesEncodingProvider.Instance);
-        ApplicationConfiguration.Initialize();
+        Application.EnableVisualStyles();
+        Application.SetCompatibleTextRenderingDefault(false);
         Application.Run(new Form1());
     }
 }

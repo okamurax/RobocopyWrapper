@@ -1,10 +1,18 @@
+using System;
 using System.Collections.Concurrent;
+using System.Collections.Generic;
 using System.Diagnostics;
+using System.Drawing;
+using System.IO;
+using System.Linq;
 using System.Runtime.InteropServices;
 using System.Security.Cryptography;
 using System.Text;
 using System.Text.Json;
 using System.Text.RegularExpressions;
+using System.Threading;
+using System.Threading.Tasks;
+using System.Windows.Forms;
 using Microsoft.Win32;
 
 namespace RobocopyWrapper;
@@ -267,7 +275,7 @@ public partial class Form1 : Form
         lblNextRun.Text = $"{prefix}次回: {_nextScheduledTime:HH:mm} (残り {hours:D2}:{minutes:D2})";
 
         var trayText = $"Robocopy Wrapper - 次回: {_nextScheduledTime:HH:mm}";
-        notifyIcon.Text = trayText.Length <= 63 ? trayText : trayText[..63];
+        notifyIcon.Text = trayText.Length <= 63 ? trayText : trayText.Substring(0, 63);
     }
 
     // 前回実行時刻を表示用にフォーマット（日をまたぐ場合は日付を付加）
@@ -413,10 +421,10 @@ public partial class Form1 : Form
     {
         rawSize = rawSize.Trim();
 
-        if (rawSize.Length > 1 && char.IsLetter(rawSize[^1]))
+        if (rawSize.Length > 1 && char.IsLetter(rawSize[rawSize.Length - 1]))
         {
-            var unit = char.ToUpper(rawSize[^1]);
-            var numPart = rawSize[..^1].Trim();
+            var unit = char.ToUpper(rawSize[rawSize.Length - 1]);
+            var numPart = rawSize.Substring(0, rawSize.Length - 1).Trim();
             if (double.TryParse(numPart, out var val))
             {
                 return unit switch
@@ -647,7 +655,7 @@ public partial class Form1 : Form
             _runningProcess.BeginOutputReadLine();
             _runningProcess.BeginErrorReadLine();
 
-            await _runningProcess.WaitForExitAsync();
+            await Task.Run(() => _runningProcess.WaitForExit());
             // 非同期出力コールバックの完了を保証（WaitForExitAsyncだけでは不十分）
             _runningProcess.WaitForExit();
             // 残バッファをすべてフラッシュしてから完了メッセージを表示
@@ -763,7 +771,7 @@ public partial class Form1 : Form
                 _isPaused = false;
             }
             _wasKilled = true;
-            _runningProcess.Kill(entireProcessTree: true);
+            _runningProcess.Kill();
             _progressQueue.Enqueue($"[{DateTime.Now:HH:mm:ss}] 中止しました");
             _errorQueue.Enqueue($"[{DateTime.Now:HH:mm:ss}] 中止しました");
         }
@@ -888,7 +896,7 @@ public partial class Form1 : Form
         {
             ct.ThrowIfCancellationRequested();
             return Directory.EnumerateFiles(source, "*", SearchOption.AllDirectories)
-                .Select(f => f[(source.Length + 1)..]) // 相対パス
+                .Select(f => f.Substring(source.Length + 1)) // 相対パス
                 .ToList();
         }, ct);
 
@@ -956,7 +964,7 @@ public partial class Form1 : Form
                 ct.ThrowIfCancellationRequested();
                 var sourceSet = new HashSet<string>(sourceFiles, StringComparer.OrdinalIgnoreCase);
                 return Directory.EnumerateFiles(dest, "*", SearchOption.AllDirectories)
-                    .Select(f => f[(dest.Length + 1)..])
+                    .Select(f => f.Substring(dest.Length + 1))
                     .Where(rel => !sourceSet.Contains(rel))
                     .ToList();
             }, ct);
@@ -985,7 +993,8 @@ public partial class Form1 : Form
     private static byte[] ComputeFileHash(string path)
     {
         using var stream = new FileStream(path, FileMode.Open, FileAccess.Read, FileShare.Read, 1024 * 1024);
-        return SHA256.HashData(stream);
+        using (var sha = SHA256.Create())
+            return sha.ComputeHash(stream);
     }
 
     #endregion
@@ -1089,7 +1098,7 @@ public partial class Form1 : Form
             txtOptions.Text = s.Options ?? "";
 
             chkSchedule.Checked = s.ScheduleEnabled;
-            nudScheduleHours.Value = Math.Clamp(s.ScheduleIntervalHours, 1, 24);
+            nudScheduleHours.Value = Math.Max(1, Math.Min(s.ScheduleIntervalHours, 24));
 
             if (s.LastRunTime.HasValue)
                 _lastRunTime = s.LastRunTime.Value;
@@ -1166,7 +1175,7 @@ public partial class Form1 : Form
                 {
                     if (_isPaused) NtResumeProcess(_runningProcess.Handle);
                     _wasKilled = true;
-                    _runningProcess.Kill(entireProcessTree: true);
+                    _runningProcess.Kill();
                 }
                 catch { }
             }
@@ -1184,7 +1193,7 @@ public partial class Form1 : Form
                 {
                     if (_isPaused) NtResumeProcess(_runningProcess.Handle);
                     _wasKilled = true;
-                    _runningProcess.Kill(entireProcessTree: true);
+                    _runningProcess.Kill();
                 }
                 catch { }
             }
