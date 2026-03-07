@@ -77,9 +77,8 @@ public partial class Form1 : Form
             panel.InitializeSchedule();
         }
 
-        // 排他チェック設定
-        panel.CanExecute = (requestor) =>
-            !GetAllPanels().Any(p => p != requestor && p.IsBusy);
+        // パス競合チェック設定
+        panel.CanExecute = (requestor) => CheckPathConflict(requestor);
 
         // イベント接続
         panel.SettingsChanged += (_, _) => SaveSettings();
@@ -214,6 +213,58 @@ public partial class Form1 : Form
         return tabControl.TabPages[index].Tag as BackupJobPanel;
     }
 
+    /// <summary>実行中ジョブとのパス競合をチェック（null=OK、文字列=競合理由）</summary>
+    /// <remarks>
+    /// コピー元同士の重複は読み取りのみなので許可。
+    /// コピー先が絡む重複（先vs先、先vs元、元vs先）のみブロック。
+    /// </remarks>
+    private string? CheckPathConflict(BackupJobPanel requestor)
+    {
+        var reqSource = requestor.SourcePath.Trim().Trim('"');
+        var reqDest = requestor.DestPath.Trim().Trim('"');
+
+        foreach (var other in GetAllPanels())
+        {
+            if (other == requestor || !other.IsBusy) continue;
+
+            var otherSource = other.SourcePath.Trim().Trim('"');
+            var otherDest = other.DestPath.Trim().Trim('"');
+
+            // コピー先 vs コピー先
+            if (!string.IsNullOrWhiteSpace(reqDest) && !string.IsNullOrWhiteSpace(otherDest)
+                && PathsOverlap(reqDest, otherDest))
+                return $"コピー先が競合しています:\n  {reqDest}\n  ↔ {otherDest}\n({other.JobName} が実行中)";
+
+            // 自分のコピー先 vs 相手のコピー元
+            if (!string.IsNullOrWhiteSpace(reqDest) && !string.IsNullOrWhiteSpace(otherSource)
+                && PathsOverlap(reqDest, otherSource))
+                return $"コピー先が他ジョブのコピー元と競合しています:\n  {reqDest}\n  ↔ {otherSource}\n({other.JobName} が実行中)";
+
+            // 自分のコピー元 vs 相手のコピー先
+            if (!string.IsNullOrWhiteSpace(reqSource) && !string.IsNullOrWhiteSpace(otherDest)
+                && PathsOverlap(reqSource, otherDest))
+                return $"コピー元が他ジョブのコピー先と競合しています:\n  {reqSource}\n  ↔ {otherDest}\n({other.JobName} が実行中)";
+        }
+        return null;
+    }
+
+    /// <summary>2つのパスが同一または親子関係にあるか判定</summary>
+    private static bool PathsOverlap(string path1, string path2)
+    {
+        try
+        {
+            var p1 = Path.GetFullPath(path1).TrimEnd('\\') + "\\";
+            var p2 = Path.GetFullPath(path2).TrimEnd('\\') + "\\";
+            return p1.StartsWith(p2, StringComparison.OrdinalIgnoreCase) ||
+                   p2.StartsWith(p1, StringComparison.OrdinalIgnoreCase);
+        }
+        catch
+        {
+            // 無効なパスの場合は文字列完全一致で判定
+            return string.Equals(path1, path2, StringComparison.OrdinalIgnoreCase);
+        }
+    }
+
     private static string? ShowInputDialog(string title, string prompt, string defaultValue)
     {
         using var form = new Form
@@ -330,7 +381,6 @@ public partial class Form1 : Form
                 panel.UpdateNextScheduleLabel();
 
             // スケジュール実行チェック
-            var anyBusy = panels.Any(p => p.IsBusy);
             foreach (var panel in panels)
             {
                 if (!panel.ScheduleEnabled) continue;
@@ -338,10 +388,11 @@ public partial class Form1 : Form
 
                 panel.AdvanceSchedulePastNow();
 
-                if (anyBusy)
+                var conflict = CheckPathConflict(panel);
+                if (conflict != null)
                 {
                     panel.AppendProgressLine(
-                        $"[{DateTime.Now:HH:mm:ss}] スケジュール実行をスキップ (別ジョブ実行中)");
+                        $"[{DateTime.Now:HH:mm:ss}] スケジュール実行をスキップ (パス競合: 別ジョブ実行中)");
                     continue;
                 }
 
@@ -351,7 +402,6 @@ public partial class Form1 : Form
                         $"{panel.JobName}: スケジュール実行を開始 ({DateTime.Now:HH:mm})", ToolTipIcon.Info);
 
                 await panel.TryScheduledExecuteAsync();
-                anyBusy = true;
             }
 
             UpdateTitleAndTray();

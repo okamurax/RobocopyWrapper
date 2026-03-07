@@ -49,8 +49,8 @@ public partial class BackupJobPanel : UserControl
         set { try { splitContainerInner.SplitterDistance = value; } catch { } }
     }
 
-    // Form1 が設定する排他チェック関数
-    public Func<BackupJobPanel, bool>? CanExecute { get; set; }
+    // Form1 が設定するパス競合チェック関数（null=OK、文字列=競合理由）
+    public Func<BackupJobPanel, string?>? CanExecute { get; set; }
 
     // イベント
     public event EventHandler? SettingsChanged;
@@ -274,19 +274,20 @@ public partial class BackupJobPanel : UserControl
             return;
         }
 
-        if (CanExecute != null && !CanExecute(this))
-        {
-            MessageBox.Show("別のタブで実行中です。完了までお待ちください。", "実行中",
-                MessageBoxButtons.OK, MessageBoxIcon.Warning);
-            return;
-        }
-
         var source = txtSource.Text.Trim().Trim('"');
         var dest = txtDest.Text.Trim().Trim('"');
 
         if (string.IsNullOrEmpty(source) || string.IsNullOrEmpty(dest))
         {
             MessageBox.Show("コピー元とコピー先を指定してください。", "入力エラー",
+                MessageBoxButtons.OK, MessageBoxIcon.Warning);
+            return;
+        }
+
+        var conflict = CanExecute?.Invoke(this);
+        if (conflict != null)
+        {
+            MessageBox.Show(conflict, "パス競合",
                 MessageBoxButtons.OK, MessageBoxIcon.Warning);
             return;
         }
@@ -533,19 +534,20 @@ public partial class BackupJobPanel : UserControl
     {
         if (_runningProcess != null || _isVerifying) return;
 
-        if (CanExecute != null && !CanExecute(this))
-        {
-            MessageBox.Show("別のタブで実行中です。完了までお待ちください。", "実行中",
-                MessageBoxButtons.OK, MessageBoxIcon.Warning);
-            return;
-        }
-
         var source = txtSource.Text.Trim().Trim('"');
         var dest = txtDest.Text.Trim().Trim('"');
 
         if (string.IsNullOrEmpty(source) || string.IsNullOrEmpty(dest))
         {
             MessageBox.Show("コピー元とコピー先を指定してください。", "入力エラー",
+                MessageBoxButtons.OK, MessageBoxIcon.Warning);
+            return;
+        }
+
+        var conflict = CanExecute?.Invoke(this);
+        if (conflict != null)
+        {
+            MessageBox.Show(conflict, "パス競合",
                 MessageBoxButtons.OK, MessageBoxIcon.Warning);
             return;
         }
