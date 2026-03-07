@@ -86,7 +86,7 @@ public partial class Form1 : Form
         panel.ExecutionStarting += (_, _) => UpdateTitleAndTray();
         panel.ExecutionCompleted += Panel_ExecutionCompleted;
         panel.ScheduleChanged += Panel_ScheduleChanged;
-        panel.SplitterMoved += Panel_SplitterMoved;
+        panel.SplitterMoved += (_, _) => SaveSettings();
 
         var tabPage = new TabPage(name) { Tag = panel };
         tabPage.Controls.Add(panel);
@@ -106,8 +106,10 @@ public partial class Form1 : Form
         }
 
         var name = GenerateTabName();
-        AddNewTab(name);
+        var panel = AddNewTab(name);
         tabControl.SelectedIndex = tabControl.TabCount - 1;
+        // 新規タブはスプリッタを均等化
+        panel.EqualizeSplitters();
         SaveSettings();
     }
 
@@ -270,26 +272,6 @@ public partial class Form1 : Form
         else
             StopSchedulerTimer();
         UpdateTitleAndTray();
-    }
-
-    private bool _isSyncingSplitters;
-
-    private void Panel_SplitterMoved(object? sender, EventArgs e)
-    {
-        if (_isSyncingSplitters) return;
-        if (sender is not BackupJobPanel source) return;
-
-        _isSyncingSplitters = true;
-        try
-        {
-            foreach (var other in GetAllPanels().Where(p => p != source))
-            {
-                other.SplitterDistance = source.SplitterDistance;
-                other.InnerSplitterDistance = source.InnerSplitterDistance;
-            }
-        }
-        finally { _isSyncingSplitters = false; }
-        SaveSettings();
     }
 
     #endregion
@@ -483,16 +465,16 @@ public partial class Form1 : Form
             {
                 var panel = AddNewTab(job.Name ?? "バックアップ", job);
 
-                // スプリッター位置はLoad後に適用
-                if (s.SplitterDistance > 0)
+                // スプリッター位置はLoad後に適用（ジョブごと、旧フォーマットはグローバル値を使用）
+                var splDist = job.SplitterDistance > 0 ? job.SplitterDistance : s.SplitterDistance;
+                var innerDist = job.InnerSplitterDistance > 0 ? job.InnerSplitterDistance : s.InnerSplitterDistance;
+                if (splDist > 0 || innerDist > 0)
                 {
-                    var dist = s.SplitterDistance;
-                    this.Load += (_, _) => { try { panel.SplitterDistance = dist; } catch { } };
-                }
-                if (s.InnerSplitterDistance > 0)
-                {
-                    var dist = s.InnerSplitterDistance;
-                    this.Load += (_, _) => { try { panel.InnerSplitterDistance = dist; } catch { } };
+                    this.Load += (_, _) =>
+                    {
+                        try { if (splDist > 0) panel.SplitterDistance = splDist; } catch { }
+                        try { if (innerDist > 0) panel.InnerSplitterDistance = innerDist; } catch { }
+                    };
                 }
             }
 
@@ -511,7 +493,6 @@ public partial class Form1 : Form
         {
             var bounds = WindowState == FormWindowState.Normal ? Bounds : RestoreBounds;
             var panels = GetAllPanels().ToList();
-            var firstPanel = panels.FirstOrDefault();
 
             var s = new AppSettings
             {
@@ -521,8 +502,6 @@ public partial class Form1 : Form
                 Height = bounds.Height,
                 WindowState = WindowState == FormWindowState.Maximized ? "Maximized" : "Normal",
                 TrayBalloonShown = _trayBalloonShown,
-                SplitterDistance = firstPanel?.SplitterDistance ?? 200,
-                InnerSplitterDistance = firstPanel?.InnerSplitterDistance ?? 80,
                 SelectedTabIndex = tabControl.SelectedIndex,
                 Jobs = panels.Select(p => new JobSettings
                 {
@@ -533,6 +512,8 @@ public partial class Form1 : Form
                     ScheduleEnabled = p.ScheduleEnabled,
                     ScheduleIntervalHours = p.ScheduleIntervalHours,
                     LastRunTime = p.LastRunTime == DateTime.MinValue ? null : (DateTime?)p.LastRunTime,
+                    SplitterDistance = p.SplitterDistance,
+                    InnerSplitterDistance = p.InnerSplitterDistance,
                 }).ToList(),
             };
             var json = JsonSerializer.Serialize(s, new JsonSerializerOptions { WriteIndented = true });
@@ -666,6 +647,8 @@ public partial class Form1 : Form
         public bool ScheduleEnabled { get; set; }
         public int ScheduleIntervalHours { get; set; } = 1;
         public DateTime? LastRunTime { get; set; }
+        public int SplitterDistance { get; set; }
+        public int InnerSplitterDistance { get; set; }
     }
 
     #endregion

@@ -954,7 +954,8 @@ public partial class BackupJobPanel : UserControl
 
     #region Misc
 
-    private void SplitContainer_DoubleClick(object? sender, EventArgs e)
+    /// <summary>3パネルを均等化</summary>
+    public void EqualizeSplitters()
     {
         var totalHeight = splitContainer.Height;
         var splitterWidths = splitContainer.SplitterWidth + splitContainerInner.SplitterWidth;
@@ -965,6 +966,11 @@ public partial class BackupJobPanel : UserControl
         var panel2Height = totalHeight - splitContainer.SplitterDistance - splitContainer.SplitterWidth;
         var innerPanel = (panel2Height - splitContainerInner.SplitterWidth) / 2;
         splitContainerInner.SplitterDistance = Math.Max(innerPanel, splitContainerInner.Panel1MinSize);
+    }
+
+    private void SplitContainer_DoubleClick(object? sender, EventArgs e)
+    {
+        EqualizeSplitters();
         SplitterMoved?.Invoke(this, EventArgs.Empty);
     }
 
