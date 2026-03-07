@@ -162,8 +162,9 @@ partial class BackupJobPanel
         splitContainer.Location = new Point(12, 140);
         splitContainer.Size = new Size(760, 320);
         splitContainer.Orientation = Orientation.Horizontal;
-        splitContainer.SplitterDistance = 180;
+        splitContainer.SplitterDistance = 160;
         splitContainer.SplitterWidth = 6;
+        splitContainer.Panel1MinSize = 40;
 
         // --- Panel1: 進捗ログ ---
         lblProgress.AutoSize = true;
@@ -250,6 +251,7 @@ partial class BackupJobPanel
         splitContainer.Panel2.Controls.Add(splitContainerInner);
 
         // BackupJobPanel
+        Size = new Size(784, 470);
         AutoScaleDimensions = new SizeF(7F, 15F);
         AutoScaleMode = AutoScaleMode.Font;
         Controls.Add(lblSource);

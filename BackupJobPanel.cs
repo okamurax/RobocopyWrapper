@@ -961,8 +961,9 @@ public partial class BackupJobPanel : UserControl
         var panelHeight = (totalHeight - splitterWidths) / 3;
 
         splitContainer.SplitterDistance = Math.Max(panelHeight, splitContainer.Panel1MinSize);
-        var innerHeight = splitContainerInner.Height;
-        var innerPanel = (innerHeight - splitContainerInner.SplitterWidth) / 2;
+        // Panel2の高さを計算で求める（レイアウト更新前でも正確）
+        var panel2Height = totalHeight - splitContainer.SplitterDistance - splitContainer.SplitterWidth;
+        var innerPanel = (panel2Height - splitContainerInner.SplitterWidth) / 2;
         splitContainerInner.SplitterDistance = Math.Max(innerPanel, splitContainerInner.Panel1MinSize);
         SplitterMoved?.Invoke(this, EventArgs.Empty);
     }
