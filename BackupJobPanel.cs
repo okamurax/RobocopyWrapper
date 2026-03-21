@@ -54,7 +54,6 @@ public partial class BackupJobPanel : UserControl
 
     // イベント
     public event EventHandler? SettingsChanged;
-    public event EventHandler? ExecutionStarting;
     public event EventHandler<JobCompletedEventArgs>? ExecutionCompleted;
     public event EventHandler? ScheduleChanged;
     public event EventHandler? SplitterMoved;
@@ -226,7 +225,7 @@ public partial class BackupJobPanel : UserControl
             return false;
         }
 
-        ExecutionStarting?.Invoke(this, EventArgs.Empty);
+
         await ExecuteRobocopyAsync();
         return true;
     }
@@ -292,7 +291,7 @@ public partial class BackupJobPanel : UserControl
             return;
         }
 
-        ExecutionStarting?.Invoke(this, EventArgs.Empty);
+
         await ExecuteRobocopyAsync();
     }
 
@@ -561,7 +560,7 @@ public partial class BackupJobPanel : UserControl
 
         _isVerifying = true;
         SetRunningState(false);
-        ExecutionStarting?.Invoke(this, EventArgs.Empty);
+
 
         txtProgress.Clear();
         txtCopyResult.Clear();
@@ -652,6 +651,16 @@ public partial class BackupJobPanel : UserControl
 
                 try
                 {
+                    var srcInfo = new FileInfo(srcPath);
+                    var dstInfo = new FileInfo(dstPath);
+
+                    if (srcInfo.Length != dstInfo.Length)
+                    {
+                        mismatchCount++;
+                        _copyResultQueue.Enqueue($"[不一致] {relPath}");
+                        continue;
+                    }
+
                     var srcHash = ComputeFileHash(srcPath);
                     ct.ThrowIfCancellationRequested();
                     var dstHash = ComputeFileHash(dstPath);
@@ -713,8 +722,8 @@ public partial class BackupJobPanel : UserControl
     private static byte[] ComputeFileHash(string path)
     {
         using var stream = new FileStream(path, FileMode.Open, FileAccess.Read, FileShare.Read, 1024 * 1024);
-        using (var sha = SHA256.Create())
-            return sha.ComputeHash(stream);
+        using (var md5 = MD5.Create())
+            return md5.ComputeHash(stream);
     }
 
     #endregion
