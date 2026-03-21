@@ -51,7 +51,6 @@ public partial class Form1 : Form
         if (GetAllPanels().Any(p => p.ScheduleEnabled))
             StartSchedulerTimer();
 
-        UpdateTitleAndTray();
         FormClosing += Form1_FormClosing;
     }
 
@@ -82,7 +81,7 @@ public partial class Form1 : Form
 
         // イベント接続
         panel.SettingsChanged += (_, _) => SaveSettings();
-        panel.ExecutionStarting += (_, _) => UpdateTitleAndTray();
+
         panel.ExecutionCompleted += Panel_ExecutionCompleted;
         panel.ScheduleChanged += Panel_ScheduleChanged;
         panel.SplitterMoved += (_, _) => SaveSettings();
@@ -311,7 +310,6 @@ public partial class Form1 : Form
             notifyIcon.ShowBalloonTip(3000, "Robocopy Wrapper", msg, icon);
         }
 
-        UpdateTitleAndTray();
         SaveSettings();
     }
 
@@ -322,7 +320,6 @@ public partial class Form1 : Form
             StartSchedulerTimer();
         else
             StopSchedulerTimer();
-        UpdateTitleAndTray();
     }
 
     #endregion
@@ -380,7 +377,7 @@ public partial class Form1 : Form
             foreach (var panel in panels)
                 panel.UpdateNextScheduleLabel();
 
-            // スケジュール実行チェック
+            // スケジュール実行チェック（並行起動）
             foreach (var panel in panels)
             {
                 if (!panel.ScheduleEnabled) continue;
@@ -401,10 +398,8 @@ public partial class Form1 : Form
                     notifyIcon.ShowBalloonTip(2000, "Robocopy Wrapper",
                         $"{panel.JobName}: スケジュール実行を開始 ({DateTime.Now:HH:mm})", ToolTipIcon.Info);
 
-                await panel.TryScheduledExecuteAsync();
+                _ = panel.TryScheduledExecuteAsync();
             }
-
-            UpdateTitleAndTray();
         }
         catch (Exception ex)
         {
@@ -417,46 +412,6 @@ public partial class Form1 : Form
         finally
         {
             _schedulerRunning = false;
-        }
-    }
-
-    #endregion
-
-    #region Title & Tray
-
-    private void UpdateTitleAndTray()
-    {
-        var panels = GetAllPanels().ToList();
-        var running = panels.FirstOrDefault(p => p.IsBusy);
-
-        if (running != null)
-        {
-            this.Text = $"Robocopy Wrapper [{running.JobName}: 実行中]";
-            var trayText = $"Robocopy Wrapper - {running.JobName}: 実行中";
-            notifyIcon.Text = trayText.Length <= 63 ? trayText : trayText.Substring(0, 63);
-        }
-        else if (panels.Any(p => p.ScheduleEnabled))
-        {
-            var nearest = panels
-                .Where(p => p.ScheduleEnabled && p.NextScheduledTime < DateTime.MaxValue)
-                .OrderBy(p => p.NextScheduledTime)
-                .FirstOrDefault();
-            if (nearest != null)
-            {
-                this.Text = "Robocopy Wrapper [スケジュール待機中]";
-                var trayText = $"Robocopy Wrapper - 次回: {nearest.NextScheduledTime:HH:mm} ({nearest.JobName})";
-                notifyIcon.Text = trayText.Length <= 63 ? trayText : trayText.Substring(0, 63);
-            }
-            else
-            {
-                this.Text = "Robocopy Wrapper [スケジュール待機中]";
-                notifyIcon.Text = "Robocopy Wrapper";
-            }
-        }
-        else
-        {
-            this.Text = "Robocopy Wrapper";
-            notifyIcon.Text = "Robocopy Wrapper";
         }
     }
 
