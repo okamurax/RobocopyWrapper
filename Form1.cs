@@ -298,14 +298,32 @@ public partial class Form1 : Form
 
         if (!this.Visible && !args.WasKilled)
         {
-            var icon = args.ExitCode < 8 ? ToolTipIcon.Info : ToolTipIcon.Error;
+            ToolTipIcon icon;
             string msg;
             if (args.WasVerification)
-                msg = $"{panel.JobName}: 検証完了 ({DateTime.Now:HH:mm})";
+            {
+                var problems = args.VerifyMismatchCount + args.VerifyMissingInDestCount
+                    + args.VerifyMissingInSourceCount + args.ErrorCount;
+                if (problems > 0)
+                {
+                    icon = ToolTipIcon.Error;
+                    msg = $"{panel.JobName}: 検証で問題 {problems}件 " +
+                        $"(不一致:{args.VerifyMismatchCount} デスト欠落:{args.VerifyMissingInDestCount} " +
+                        $"ソース欠落:{args.VerifyMissingInSourceCount} エラー:{args.ErrorCount})";
+                }
+                else
+                {
+                    icon = ToolTipIcon.Info;
+                    msg = $"{panel.JobName}: 検証完了 ({DateTime.Now:HH:mm})";
+                }
+            }
             else
+            {
+                icon = args.ExitCode < 8 ? ToolTipIcon.Info : ToolTipIcon.Error;
                 msg = args.ExitCode < 8
                     ? $"{panel.JobName}: バックアップ完了 ({DateTime.Now:HH:mm})"
                     : $"{panel.JobName}: エラー発生 (終了コード: {args.ExitCode})";
+            }
 
             notifyIcon.ShowBalloonTip(3000, "Robocopy Wrapper", msg, icon);
         }
@@ -385,11 +403,27 @@ public partial class Form1 : Form
 
                 panel.AdvanceSchedulePastNow();
 
+                // 前回のジョブがまだ動いていれば skip（黙ってスケジュールが消えないよう通知）
+                if (panel.IsBusy)
+                {
+                    panel.AppendProgressLine(
+                        $"[{DateTime.Now:HH:mm:ss}] スケジュール実行をスキップ (前回のジョブが実行中)");
+                    if (!this.Visible)
+                        notifyIcon.ShowBalloonTip(3000, "Robocopy Wrapper",
+                            $"{panel.JobName}: スケジュール実行をスキップ (前回のジョブが実行中)",
+                            ToolTipIcon.Warning);
+                    continue;
+                }
+
                 var conflict = CheckPathConflict(panel);
                 if (conflict != null)
                 {
                     panel.AppendProgressLine(
                         $"[{DateTime.Now:HH:mm:ss}] スケジュール実行をスキップ (パス競合: 別ジョブ実行中)");
+                    if (!this.Visible)
+                        notifyIcon.ShowBalloonTip(3000, "Robocopy Wrapper",
+                            $"{panel.JobName}: スケジュール実行をスキップ (パス競合)",
+                            ToolTipIcon.Warning);
                     continue;
                 }
 

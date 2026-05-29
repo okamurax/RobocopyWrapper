@@ -215,7 +215,11 @@ public partial class BackupJobPanel : UserControl
     /// <summary>スケジュール実行を試行（Form1のタイマーから呼ばれる）</summary>
     public async Task<bool> TryScheduledExecuteAsync()
     {
-        if (IsBusy) return false;
+        if (IsBusy)
+        {
+            AppendProgressLine($"[{DateTime.Now:HH:mm:ss}] スケジュール実行をスキップ (前回のジョブが実行中)");
+            return false;
+        }
 
         var source = txtSource.Text.Trim().Trim('"');
         var dest = txtDest.Text.Trim().Trim('"');
@@ -568,9 +572,10 @@ public partial class BackupJobPanel : UserControl
         StartFlushTimer();
         _verifyCts = new CancellationTokenSource();
 
+        var result = (Match: 0, Mismatch: 0, MissingInDest: 0, MissingInSource: 0, Error: 0);
         try
         {
-            await VerifyChecksumsAsync(source, dest, _verifyCts.Token);
+            result = await VerifyChecksumsAsync(source, dest, _verifyCts.Token);
         }
         catch (OperationCanceledException)
         {
@@ -579,6 +584,7 @@ public partial class BackupJobPanel : UserControl
         catch (Exception ex)
         {
             _progressQueue.Enqueue($"[{DateTime.Now:HH:mm:ss}] 検証エラー: {ex.Message}");
+            result.Error++;
         }
         finally
         {
@@ -589,7 +595,14 @@ public partial class BackupJobPanel : UserControl
             if (!IsDisposed)
             {
                 SetRunningState(false);
-                ExecutionCompleted?.Invoke(this, new JobCompletedEventArgs { WasVerification = true });
+                ExecutionCompleted?.Invoke(this, new JobCompletedEventArgs
+                {
+                    WasVerification = true,
+                    ErrorCount = result.Error,
+                    VerifyMismatchCount = result.Mismatch,
+                    VerifyMissingInDestCount = result.MissingInDest,
+                    VerifyMissingInSourceCount = result.MissingInSource,
+                });
             }
         }
     }
@@ -599,7 +612,8 @@ public partial class BackupJobPanel : UserControl
         _verifyCts?.Cancel();
     }
 
-    private async Task VerifyChecksumsAsync(string source, string dest, CancellationToken ct)
+    private async Task<(int Match, int Mismatch, int MissingInDest, int MissingInSource, int Error)>
+        VerifyChecksumsAsync(string source, string dest, CancellationToken ct)
     {
         _progressQueue.Enqueue($"[{DateTime.Now:HH:mm:ss}] チェックサム検証開始: {source} ↔ {dest}");
         _progressQueue.Enqueue(new string('─', 70));
@@ -613,11 +627,12 @@ public partial class BackupJobPanel : UserControl
 
         _progressQueue.Enqueue($"[{DateTime.Now:HH:mm:ss}] ファイルを列挙中...");
 
+        var sourceBaseLen = source.TrimEnd('\\').Length + 1;
         var sourceFiles = await Task.Run(() =>
         {
             ct.ThrowIfCancellationRequested();
             return Directory.EnumerateFiles(source, "*", SearchOption.AllDirectories)
-                .Select(f => f.Substring(source.Length + 1))
+                .Select(f => f.Substring(sourceBaseLen))
                 .ToList();
         }, ct);
 
@@ -642,33 +657,49 @@ public partial class BackupJobPanel : UserControl
                         $"[{DateTime.Now:HH:mm:ss}] 検証中... {processed:#,0}/{total:#,0} ({100.0 * processed / total:F1}%)");
                 }
 
-                if (!File.Exists(dstPath))
+                var srcLong = LongPath(srcPath);
+                var dstLong = LongPath(dstPath);
+
+                if (!new FileInfo(dstLong).Exists)
                 {
                     missingInDestCount++;
-                    _copyResultQueue.Enqueue($"[デスト欠落] {relPath}");
+                    var line = $"[デスト欠落] {relPath}";
+                    _copyResultQueue.Enqueue(line);
+                    _errorQueue.Enqueue(line);
                     continue;
                 }
 
                 try
                 {
-                    var srcInfo = new FileInfo(srcPath);
-                    var dstInfo = new FileInfo(dstPath);
+                    var srcInfo = new FileInfo(srcLong);
+                    var dstInfo = new FileInfo(dstLong);
 
                     if (srcInfo.Length != dstInfo.Length)
                     {
                         mismatchCount++;
-                        _copyResultQueue.Enqueue($"[不一致] {relPath}");
+                        var line = $"[不一致] {relPath}";
+                        _copyResultQueue.Enqueue(line);
+                        _errorQueue.Enqueue(line);
                         continue;
                     }
 
-                    var srcHash = ComputeFileHash(srcPath);
+                    if (srcInfo.Length > PartialHashThreshold)
+                    {
+                        var sizeMB = srcInfo.Length / (1024.0 * 1024.0);
+                        _progressQueue.Enqueue(
+                            $"[{DateTime.Now:HH:mm:ss}] 大容量ファイル検証中 ({sizeMB:#,0} MB): {relPath}");
+                    }
+
+                    var srcHash = ComputeFileHash(srcLong);
                     ct.ThrowIfCancellationRequested();
-                    var dstHash = ComputeFileHash(dstPath);
+                    var dstHash = ComputeFileHash(dstLong);
 
                     if (!srcHash.SequenceEqual(dstHash))
                     {
                         mismatchCount++;
-                        _copyResultQueue.Enqueue($"[不一致] {relPath}");
+                        var line = $"[不一致] {relPath}";
+                        _copyResultQueue.Enqueue(line);
+                        _errorQueue.Enqueue(line);
                     }
                     else
                     {
@@ -679,7 +710,9 @@ public partial class BackupJobPanel : UserControl
                 catch (Exception ex)
                 {
                     errorCount++;
-                    _copyResultQueue.Enqueue($"[エラー] {relPath}: {ex.Message}");
+                    var line = $"[エラー] {relPath}: {ex.Message}";
+                    _copyResultQueue.Enqueue(line);
+                    _errorQueue.Enqueue(line);
                 }
             }
         }, ct);
@@ -688,12 +721,13 @@ public partial class BackupJobPanel : UserControl
 
         if (Directory.Exists(dest))
         {
+            var destBaseLen = dest.TrimEnd('\\').Length + 1;
             var destOnlyFiles = await Task.Run(() =>
             {
                 ct.ThrowIfCancellationRequested();
                 var sourceSet = new HashSet<string>(sourceFiles, StringComparer.OrdinalIgnoreCase);
                 return Directory.EnumerateFiles(dest, "*", SearchOption.AllDirectories)
-                    .Select(f => f.Substring(dest.Length + 1))
+                    .Select(f => f.Substring(destBaseLen))
                     .Where(rel => !sourceSet.Contains(rel))
                     .ToList();
             }, ct);
@@ -701,7 +735,9 @@ public partial class BackupJobPanel : UserControl
             foreach (var rel in destOnlyFiles)
             {
                 missingInSourceCount++;
-                _copyResultQueue.Enqueue($"[ソース欠落] {rel}");
+                var line = $"[ソース欠落] {rel}";
+                _copyResultQueue.Enqueue(line);
+                _errorQueue.Enqueue(line);
             }
         }
 
@@ -717,13 +753,78 @@ public partial class BackupJobPanel : UserControl
 
         if (mismatchCount + missingInDestCount + missingInSourceCount + errorCount == 0)
             _copyResultQueue.Enqueue("すべてのファイルが一致しました。");
+        else
+            _errorQueue.Enqueue(summary);
+
+        return (matchCount, mismatchCount, missingInDestCount, missingInSourceCount, errorCount);
     }
+
+    private const long PartialHashThreshold = 1L * 1024 * 1024 * 1024; // 1GB
+    private const int SampleBlockSize = 4 * 1024 * 1024; // 4MB
+    private const int EdgeBlockSize = 8 * 1024 * 1024; // 8MB
+    private const long SampleInterval = 1L * 1024 * 1024 * 1024; // 1GB間隔
 
     private static byte[] ComputeFileHash(string path)
     {
+        var fileInfo = new FileInfo(path);
+        if (fileInfo.Length > PartialHashThreshold)
+            return ComputePartialHash(path, fileInfo.Length);
+
         using var stream = new FileStream(path, FileMode.Open, FileAccess.Read, FileShare.Read, 1024 * 1024);
         using (var md5 = MD5.Create())
             return md5.ComputeHash(stream);
+    }
+
+    private static byte[] ComputePartialHash(string path, long fileLength)
+    {
+        using var md5 = MD5.Create();
+        var buffer = new byte[Math.Max(EdgeBlockSize, SampleBlockSize)];
+
+        using (var stream = new FileStream(path, FileMode.Open, FileAccess.Read, FileShare.Read, 1024 * 1024))
+        {
+            // ファイルサイズもハッシュに含める
+            var lengthBytes = BitConverter.GetBytes(fileLength);
+            md5.TransformBlock(lengthBytes, 0, lengthBytes.Length, null, 0);
+
+            // 先頭 8MB
+            var headRead = ReadFully(stream, buffer, EdgeBlockSize);
+            md5.TransformBlock(buffer, 0, headRead, null, 0);
+
+            // 中間: 1GB間隔で 4MB ずつサンプリング
+            for (long offset = SampleInterval; offset + SampleBlockSize < fileLength - EdgeBlockSize; offset += SampleInterval)
+            {
+                stream.Position = offset;
+                var read = ReadFully(stream, buffer, SampleBlockSize);
+                md5.TransformBlock(buffer, 0, read, null, 0);
+            }
+
+            // 末尾 8MB
+            stream.Position = fileLength - EdgeBlockSize;
+            var tailRead = ReadFully(stream, buffer, EdgeBlockSize);
+            md5.TransformFinalBlock(buffer, 0, tailRead);
+        }
+
+        return md5.Hash;
+    }
+
+    private static int ReadFully(FileStream stream, byte[] buffer, int count)
+    {
+        var totalRead = 0;
+        while (totalRead < count)
+        {
+            var read = stream.Read(buffer, totalRead, count - totalRead);
+            if (read == 0) break;
+            totalRead += read;
+        }
+        return totalRead;
+    }
+
+    /// <summary>長いパスに \\?\ プレフィックスを付与して MAX_PATH 制限を回避する。</summary>
+    private static string LongPath(string path)
+    {
+        if (path.StartsWith(@"\\?\")) return path;
+        if (path.StartsWith(@"\\")) return @"\\?\UNC\" + path.Substring(2);
+        return @"\\?\" + path;
     }
 
     #endregion
@@ -1030,4 +1131,7 @@ public class JobCompletedEventArgs : EventArgs
     public int ExitCode { get; set; }
     public int ErrorCount { get; set; }
     public bool WasVerification { get; set; }
+    public int VerifyMismatchCount { get; set; }
+    public int VerifyMissingInDestCount { get; set; }
+    public int VerifyMissingInSourceCount { get; set; }
 }
