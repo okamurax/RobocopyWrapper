@@ -38,7 +38,6 @@ public partial class Form1 : Form
 
         // タブ管理
         btnAddTab.Click += BtnAddTab_Click;
-        btnRemoveTab.Click += BtnRemoveTab_Click;
         tabControl.MouseClick += TabControl_MouseClick;
         tabMenuRename.Click += TabMenuRename_Click;
         tabMenuDelete.Click += TabMenuDelete_Click;
@@ -90,7 +89,6 @@ public partial class Form1 : Form
         tabPage.Controls.Add(panel);
         tabControl.TabPages.Add(tabPage);
 
-        UpdateRemoveButtonState();
         return panel;
     }
 
@@ -109,11 +107,6 @@ public partial class Form1 : Form
         // 新規タブはスプリッタを均等化
         panel.EqualizeSplitters();
         SaveSettings();
-    }
-
-    private void BtnRemoveTab_Click(object? sender, EventArgs e)
-    {
-        RemoveTab(tabControl.SelectedIndex);
     }
 
     private void RemoveTab(int index)
@@ -140,7 +133,6 @@ public partial class Form1 : Form
         tabControl.TabPages.RemoveAt(index);
         panel?.Dispose();
         tabPage.Dispose();
-        UpdateRemoveButtonState();
         SaveSettings();
     }
 
@@ -180,11 +172,6 @@ public partial class Form1 : Form
     {
         if (_rightClickedTab == null || !tabControl.TabPages.Contains(_rightClickedTab)) return;
         RemoveTab(tabControl.TabPages.IndexOf(_rightClickedTab));
-    }
-
-    private void UpdateRemoveButtonState()
-    {
-        btnRemoveTab.Enabled = tabControl.TabCount > 1;
     }
 
     private string GenerateTabName()

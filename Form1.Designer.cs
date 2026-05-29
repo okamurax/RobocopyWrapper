@@ -24,7 +24,6 @@ partial class Form1
         components = new System.ComponentModel.Container();
         chkStartup = new CheckBox();
         btnAddTab = new Button();
-        btnRemoveTab = new Button();
         tabControl = new TabControl();
         trayContextMenu = new ContextMenuStrip(components);
         trayMenuShow = new ToolStripMenuItem();
@@ -42,15 +41,9 @@ partial class Form1
 
         // btnAddTab
         btnAddTab.Anchor = AnchorStyles.Top | AnchorStyles.Right;
-        btnAddTab.Location = new Point(690, 5);
+        btnAddTab.Location = new Point(734, 5);
         btnAddTab.Size = new Size(40, 25);
         btnAddTab.Text = "+";
-
-        // btnRemoveTab
-        btnRemoveTab.Anchor = AnchorStyles.Top | AnchorStyles.Right;
-        btnRemoveTab.Location = new Point(734, 5);
-        btnRemoveTab.Size = new Size(40, 25);
-        btnRemoveTab.Text = "−";
 
         // tabControl
         tabControl.Anchor = AnchorStyles.Top | AnchorStyles.Bottom | AnchorStyles.Left | AnchorStyles.Right;
@@ -87,7 +80,6 @@ partial class Form1
         ClientSize = new Size(784, 505);
         Controls.Add(chkStartup);
         Controls.Add(btnAddTab);
-        Controls.Add(btnRemoveTab);
         Controls.Add(tabControl);
         MinimumSize = new Size(500, 400);
         Text = "Robocopy Wrapper";
@@ -99,7 +91,6 @@ partial class Form1
 
     private CheckBox chkStartup;
     private Button btnAddTab;
-    private Button btnRemoveTab;
     private TabControl tabControl;
     private NotifyIcon notifyIcon;
     private ContextMenuStrip trayContextMenu;
